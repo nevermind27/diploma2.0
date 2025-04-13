@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+python-multipart
+requests
+cryptography
+aiohttp
+pytest
+pytest-asyncio
+pydantic 

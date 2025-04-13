@@ -1,0 +1,20 @@
+[
+  {
+    "url": "http://localhost:8080",
+    "priority": 1,
+    "name": "Основной сервер",
+    "description": "Основной сервер обработки данных"
+  },
+  {
+    "url": "http://localhost:8081",
+    "priority": 2,
+    "name": "Резервный сервер 1",
+    "description": "Первый резервный сервер"
+  },
+  {
+    "url": "http://localhost:8082",
+    "priority": 3,
+    "name": "Резервный сервер 2",
+    "description": "Второй резервный сервер"
+  }
+] 

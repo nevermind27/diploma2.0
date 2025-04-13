@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Просмотр Sentinel-2</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -188,11 +190,25 @@
             background-color: #f8d7da;
             color: #721c24;
         }
+        #map {
+            height: 400px;
+            width: 100%;
+            margin-bottom: 20px;
+            border-radius: 8px;
+        }
+        .spectrum-selector {
+            margin-top: 20px;
+        }
+        .spectrum-checkbox {
+            margin: 5px 0;
+        }
     </style>
 </head>
 <body>
     <div class="tabs">
         <button class="tab-button active" onclick="showTab('viewer')">Просмотр снимков</button>
+        <button class="tab-button" onclick="showTab('search')">Поиск по карте</button>
+        <button class="tab-button" onclick="showTab('download')">Скачивание архивов</button>
         <button class="tab-button" onclick="showTab('upload')">Загрузка снимков</button>
     </div>
 
@@ -236,6 +252,79 @@
 
         <div id="full-image-container" onclick="this.style.display='none'">
             <img id="full-image">
+        </div>
+    </div>
+
+    <div id="search" class="tab-content">
+        <div class="container">
+            <h2>Поиск снимков по карте</h2>
+            <div id="map"></div>
+            <div class="controls">
+                <button onclick="searchSelectedArea()" class="upload-button">Найти снимки</button>
+                <div id="search-results"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="download" class="tab-content">
+        <div class="container">
+            <h2>Скачивание архивов</h2>
+            <div class="spectrum-selector">
+                <h3>Выберите спектры для скачивания:</h3>
+                <div class="spectrum-checkbox">
+                    <input type="checkbox" id="B01" value="B01">
+                    <label for="B01">B01 - Coastal aerosol (443nm)</label>
+                </div>
+                <div class="spectrum-checkbox">
+                    <input type="checkbox" id="B02" value="B02">
+                    <label for="B02">B02 - Blue (490nm)</label>
+                </div>
+                <div class="spectrum-checkbox">
+                    <input type="checkbox" id="B03" value="B03">
+                    <label for="B03">B03 - Green (560nm)</label>
+                </div>
+                <div class="spectrum-checkbox">
+                    <input type="checkbox" id="B04" value="B04">
+                    <label for="B04">B04 - Red (665nm)</label>
+                </div>
+                <div class="spectrum-checkbox">
+                    <input type="checkbox" id="B05" value="B05">
+                    <label for="B05">B05 - Red Edge 1 (705nm)</label>
+                </div>
+                <div class="spectrum-checkbox">
+                    <input type="checkbox" id="B06" value="B06">
+                    <label for="B06">B06 - Red Edge 2 (740nm)</label>
+                </div>
+                <div class="spectrum-checkbox">
+                    <input type="checkbox" id="B07" value="B07">
+                    <label for="B07">B07 - Red Edge 3 (783nm)</label>
+                </div>
+                <div class="spectrum-checkbox">
+                    <input type="checkbox" id="B08" value="B08">
+                    <label for="B08">B08 - NIR (842nm)</label>
+                </div>
+                <div class="spectrum-checkbox">
+                    <input type="checkbox" id="B09" value="B09">
+                    <label for="B09">B09 - Water vapour (940nm)</label>
+                </div>
+                <div class="spectrum-checkbox">
+                    <input type="checkbox" id="B10" value="B10">
+                    <label for="B10">B10 - SWIR-Cirrus (1375nm)</label>
+                </div>
+                <div class="spectrum-checkbox">
+                    <input type="checkbox" id="B11" value="B11">
+                    <label for="B11">B11 - SWIR 1 (1610nm)</label>
+                </div>
+                <div class="spectrum-checkbox">
+                    <input type="checkbox" id="B12" value="B12">
+                    <label for="B12">B12 - SWIR 2 (2190nm)</label>
+                </div>
+                <div class="spectrum-checkbox">
+                    <input type="checkbox" id="TCI" value="TCI">
+                    <label for="TCI">TCI - True Color Image</label>
+                </div>
+            </div>
+            <button onclick="downloadSelectedSpectrums()" class="upload-button">Скачать выбранные спектры</button>
         </div>
     </div>
 
@@ -362,6 +451,11 @@
             // Показываем выбранную вкладку
             document.getElementById(tabName).classList.add('active');
             document.querySelector(`button[onclick="showTab('${tabName}')"]`).classList.add('active');
+            
+            // Инициализируем карту при переключении на вкладку поиска
+            if (tabName === 'search') {
+                setTimeout(initMap, 100); // Небольшая задержка для корректной инициализации
+            }
         }
 
         // Обработка загрузки файлов
@@ -403,8 +497,318 @@
             uploadStatus.style.display = 'block';
         }
 
+        // Инициализация карты
+        let map = null;
+        let searchArea = null;
+        let searchRectangle = null;
+        let markers = [];
+
+        function initMap() {
+            if (map) {
+                map.remove();
+            }
+            
+            map = L.map('map', {
+                center: [55.7558, 37.6173],
+                zoom: 4,
+                minZoom: 2,
+                maxZoom: 18,
+                maxBounds: L.latLngBounds(L.latLng(-90, -180), L.latLng(90, 180)),
+                maxBoundsViscosity: 1.0
+            });
+            
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors',
+                maxZoom: 18,
+                noWrap: true
+            }).addTo(map);
+            
+            // Добавляем обработчик клика по карте
+            map.on('click', function(e) {
+                if (searchArea === null) {
+                    searchArea = e.latlng;
+                    if (searchRectangle) {
+                        map.removeLayer(searchRectangle);
+                    }
+                    searchRectangle = L.rectangle([searchArea, searchArea], {
+                        color: "#ff7800",
+                        weight: 1
+                    }).addTo(map);
+                    updateCoordinatesDisplay();
+                } else {
+                    const bounds = L.latLngBounds([searchArea, e.latlng]);
+                    if (searchRectangle) {
+                        map.removeLayer(searchRectangle);
+                    }
+                    searchRectangle = L.rectangle(bounds, {
+                        color: "#ff7800",
+                        weight: 1
+                    }).addTo(map);
+                    searchArea = null;
+                    updateCoordinatesDisplay();
+                }
+            });
+            
+            // Добавляем инструкцию для пользователя
+            const instruction = L.control({position: 'topright'});
+            instruction.onAdd = function(map) {
+                const div = L.DomUtil.create('div', 'map-instruction');
+                div.innerHTML = '<div style="background: white; padding: 10px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.2);">' +
+                    '<strong>Инструкция:</strong><br>' +
+                    '1. Кликните по первой точке области<br>' +
+                    '2. Кликните по второй точке области<br>' +
+                    '3. Нажмите "Найти снимки"</div>';
+                return div;
+            };
+            instruction.addTo(map);
+            
+            // Добавляем панель с координатами
+            const coordinatesPanel = L.control({position: 'bottomleft'});
+            coordinatesPanel.onAdd = function(map) {
+                const div = L.DomUtil.create('div', 'coordinates-panel');
+                div.innerHTML = '<div style="background: white; padding: 10px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.2);">' +
+                    '<h4>Координаты области:</h4>' +
+                    '<div id="coordinates-display">Область не выбрана</div>' +
+                    '<div style="margin-top: 10px;">' +
+                    '<button id="clear-coordinates" class="upload-button" style="padding: 5px 10px; margin-right: 5px;">Очистить</button>' +
+                    '<button id="edit-coordinates" class="upload-button" style="padding: 5px 10px;">Редактировать</button>' +
+                    '</div>' +
+                    '<div id="coordinates-edit-form" style="display: none; margin-top: 10px;">' +
+                    '<div style="margin-bottom: 5px;">' +
+                    '<label for="north">Северная широта:</label>' +
+                    '<input type="number" id="north" step="0.0001" style="width: 100%;">' +
+                    '</div>' +
+                    '<div style="margin-bottom: 5px;">' +
+                    '<label for="south">Южная широта:</label>' +
+                    '<input type="number" id="south" step="0.0001" style="width: 100%;">' +
+                    '</div>' +
+                    '<div style="margin-bottom: 5px;">' +
+                    '<label for="east">Восточная долгота:</label>' +
+                    '<input type="number" id="east" step="0.0001" style="width: 100%;">' +
+                    '</div>' +
+                    '<div style="margin-bottom: 5px;">' +
+                    '<label for="west">Западная долгота:</label>' +
+                    '<input type="number" id="west" step="0.0001" style="width: 100%;">' +
+                    '</div>' +
+                    '<button id="apply-coordinates" class="upload-button" style="padding: 5px 10px; margin-right: 5px;">Применить</button>' +
+                    '<button id="cancel-edit" class="upload-button" style="padding: 5px 10px;">Отмена</button>' +
+                    '</div>' +
+                    '</div>';
+                return div;
+            };
+            coordinatesPanel.addTo(map);
+            
+            // Добавляем обработчики для кнопок
+            document.getElementById('clear-coordinates').addEventListener('click', function() {
+                if (searchRectangle) {
+                    map.removeLayer(searchRectangle);
+                    searchRectangle = null;
+                }
+                searchArea = null;
+                updateCoordinatesDisplay();
+            });
+            
+            document.getElementById('edit-coordinates').addEventListener('click', function() {
+                const form = document.getElementById('coordinates-edit-form');
+                form.style.display = 'block';
+                
+                if (searchRectangle) {
+                    const bounds = searchRectangle.getBounds();
+                    document.getElementById('north').value = bounds.getNorth().toFixed(4);
+                    document.getElementById('south').value = bounds.getSouth().toFixed(4);
+                    document.getElementById('east').value = bounds.getEast().toFixed(4);
+                    document.getElementById('west').value = bounds.getWest().toFixed(4);
+                }
+            });
+            
+            document.getElementById('apply-coordinates').addEventListener('click', function() {
+                const north = parseFloat(document.getElementById('north').value);
+                const south = parseFloat(document.getElementById('south').value);
+                const east = parseFloat(document.getElementById('east').value);
+                const west = parseFloat(document.getElementById('west').value);
+                
+                if (isNaN(north) || isNaN(south) || isNaN(east) || isNaN(west)) {
+                    alert('Пожалуйста, введите корректные числовые значения');
+                    return;
+                }
+                
+                if (north <= south || east <= west) {
+                    alert('Некорректные границы области. Северная широта должна быть больше южной, восточная долгота должна быть больше западной');
+                    return;
+                }
+                
+                if (searchRectangle) {
+                    map.removeLayer(searchRectangle);
+                }
+                
+                searchRectangle = L.rectangle([[north, west], [south, east]], {
+                    color: "#ff7800",
+                    weight: 1
+                }).addTo(map);
+                
+                document.getElementById('coordinates-edit-form').style.display = 'none';
+                updateCoordinatesDisplay();
+            });
+            
+            document.getElementById('cancel-edit').addEventListener('click', function() {
+                document.getElementById('coordinates-edit-form').style.display = 'none';
+            });
+        }
+        
+        function updateCoordinatesDisplay() {
+            const display = document.getElementById('coordinates-display');
+            
+            if (!searchRectangle) {
+                display.textContent = 'Область не выбрана';
+                return;
+            }
+            
+            const bounds = searchRectangle.getBounds();
+            display.innerHTML = `
+                <strong>Северная широта:</strong> ${bounds.getNorth().toFixed(4)}°<br>
+                <strong>Южная широта:</strong> ${bounds.getSouth().toFixed(4)}°<br>
+                <strong>Восточная долгота:</strong> ${bounds.getEast().toFixed(4)}°<br>
+                <strong>Западная долгота:</strong> ${bounds.getWest().toFixed(4)}°
+            `;
+        }
+
+        async function searchSelectedArea() {
+            if (!searchRectangle) {
+                alert('Пожалуйста, выберите область на карте');
+                return;
+            }
+
+            // Очищаем предыдущие маркеры
+            markers.forEach(marker => map.removeLayer(marker));
+            markers = [];
+
+            const bounds = searchRectangle.getBounds();
+            const response = await fetch('/search', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    north: bounds.getNorth(),
+                    south: bounds.getSouth(),
+                    east: bounds.getEast(),
+                    west: bounds.getWest()
+                })
+            });
+
+            const data = await response.json();
+            const resultsDiv = document.getElementById('search-results');
+            resultsDiv.innerHTML = '';
+
+            if (data.error) {
+                resultsDiv.innerHTML = `<p style="color: red">${data.error}</p>`;
+                return;
+            }
+
+            // Добавляем заголовок с количеством найденных снимков
+            resultsDiv.innerHTML = `<h3>Найдено снимков: ${data.count}</h3>`;
+
+            // Создаем таблицу для результатов
+            const table = document.createElement('table');
+            table.style.width = '100%';
+            table.style.borderCollapse = 'collapse';
+            table.style.marginTop = '10px';
+
+            // Добавляем заголовок таблицы
+            const thead = document.createElement('thead');
+            thead.innerHTML = `
+                <tr>
+                    <th style="padding: 8px; border: 1px solid #ddd;">Дата</th>
+                    <th style="padding: 8px; border: 1px solid #ddd;">Координаты</th>
+                    <th style="padding: 8px; border: 1px solid #ddd;">Действия</th>
+                </tr>
+            `;
+            table.appendChild(thead);
+
+            // Добавляем строки с данными
+            const tbody = document.createElement('tbody');
+            data.images.forEach(image => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td style="padding: 8px; border: 1px solid #ddd;">${image.date}</td>
+                    <td style="padding: 8px; border: 1px solid #ddd;">${image.coordinates.lat.toFixed(4)}, ${image.coordinates.lon.toFixed(4)}</td>
+                    <td style="padding: 8px; border: 1px solid #ddd;">
+                        <button onclick="downloadImage('${image.id}')" class="upload-button" style="padding: 5px 10px;">Скачать</button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+
+                // Добавляем маркер на карту
+                const marker = L.marker([image.coordinates.lat, image.coordinates.lon])
+                    .bindPopup(`
+                        <b>Дата:</b> ${image.date}<br>
+                        <b>Координаты:</b> ${image.coordinates.lat.toFixed(4)}, ${image.coordinates.lon.toFixed(4)}<br>
+                        <button onclick="downloadImage('${image.id}')" class="upload-button" style="padding: 5px 10px;">Скачать</button>
+                    `)
+                    .addTo(map);
+                markers.push(marker);
+            });
+            table.appendChild(tbody);
+            resultsDiv.appendChild(table);
+
+            // Подстраиваем границы карты, чтобы показать все маркеры
+            if (markers.length > 0) {
+                const group = L.featureGroup(markers);
+                map.fitBounds(group.getBounds().pad(0.1));
+            }
+        }
+
+        async function downloadImage(imageId) {
+            // Здесь будет логика скачивания конкретного снимка
+            alert('Функция скачивания снимка будет реализована позже');
+        }
+
+        async function downloadSelectedSpectrums() {
+            const selectedSpectrums = Array.from(document.querySelectorAll('.spectrum-checkbox input:checked'))
+                .map(checkbox => checkbox.value);
+
+            if (selectedSpectrums.length === 0) {
+                alert('Пожалуйста, выберите хотя бы один спектр');
+                return;
+            }
+
+            try {
+                const response = await fetch('/download', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        spectrums: selectedSpectrums
+                    })
+                });
+
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'sentinel_images.zip';
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    a.remove();
+                } else {
+                    const data = await response.json();
+                    alert(data.error || 'Ошибка при скачивании архива');
+                }
+            } catch (error) {
+                alert('Ошибка при скачивании архива: ' + error.message);
+            }
+        }
+
         // Инициализация при загрузке страницы
         loadTiles();
+        
+        // Инициализируем карту при загрузке страницы, если активна вкладка поиска
+        if (document.getElementById('search').classList.contains('active')) {
+            setTimeout(initMap, 100);
+        }
     </script>
 </body>
 </html>
