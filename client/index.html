@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Просмотр Sentinel-2</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .viewer-section {
+            display: grid;
+            grid-template-columns: 1fr 300px;
+            gap: 20px;
+        }
+
+        #tile-container {
+            display: grid;
+            grid-template-columns: repeat(18, 50px);
+            grid-template-rows: repeat(18, 50px);
+            gap: 2px;
+            background: white;
+            padding: 10px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .tile {
+            width: 50px;
+            height: 50px;
+            object-fit: cover;
+            cursor: pointer;
+            border: 1px solid #ccc;
+            transition: opacity 0.3s;
+        }
+
+        .tile.loading {
+            opacity: 0.5;
+        }
+
+        .tile.loaded {
+            opacity: 1;
+        }
+
+        .tile:hover::after {
+            content: attr(data-position);
+            position: absolute;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            z-index: 1000;
+        }
+
+        .controls {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .band-selector {
+            margin-bottom: 20px;
+        }
+
+        .band-selector select {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 10px;
+        }
+
+        .status {
+            margin-top: 20px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 4px;
+        }
+
+        #full-image-container {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+
+        #full-image {
+            max-width: 90%;
+            max-height: 90%;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #f0f0f0;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-top: 10px;
+        }
+
+        .progress {
+            width: 0%;
+            height: 100%;
+            background-color: #4CAF50;
+            transition: width 0.3s ease;
+        }
+
+        .tabs {
+            margin-bottom: 20px;
+        }
+        .tab-button {
+            padding: 10px 20px;
+            margin-right: 10px;
+            border: none;
+            background-color: #ddd;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+        .tab-button.active {
+            background-color: #007bff;
+            color: white;
+        }
+        .tab-content {
+            display: none;
+            background-color: white;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .upload-container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: white;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .upload-form {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        .file-input {
+            padding: 10px;
+            border: 2px dashed #ddd;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .upload-button {
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .upload-button:hover {
+            background-color: #0056b3;
+        }
+        .upload-status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .upload-status.success {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .upload-status.error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+    </style>
+</head>
+<body>
+    <div class="tabs">
+        <button class="tab-button active" onclick="showTab('viewer')">Просмотр снимков</button>
+        <button class="tab-button" onclick="showTab('upload')">Загрузка снимков</button>
+    </div>
+
+    <div id="viewer" class="tab-content active">
+        <div class="container">
+            <h1>Просмотр Sentinel-2</h1>
+            
+            <div class="viewer-section">
+                <div id="tile-container"></div>
+                
+                <div class="controls">
+                    <div class="band-selector">
+                        <h3>Выбор спектрального канала</h3>
+                        <select id="band-select" onchange="changeBand()">
+                            <option value="B01">B01 - Coastal aerosol (443nm)</option>
+                            <option value="B02">B02 - Blue (490nm)</option>
+                            <option value="B03">B03 - Green (560nm)</option>
+                            <option value="B04">B04 - Red (665nm)</option>
+                            <option value="B05">B05 - Red Edge 1 (705nm)</option>
+                            <option value="B06">B06 - Red Edge 2 (740nm)</option>
+                            <option value="B07">B07 - Red Edge 3 (783nm)</option>
+                            <option value="B08">B08 - NIR (842nm)</option>
+                            <option value="B09">B09 - Water vapour (940nm)</option>
+                            <option value="B10">B10 - SWIR-Cirrus (1375nm)</option>
+                            <option value="B11">B11 - SWIR 1 (1610nm)</option>
+                            <option value="B12">B12 - SWIR 2 (2190nm)</option>
+                            <option value="TCI">TCI - True Color Image</option>
+                        </select>
+                    </div>
+                    
+                    <div class="status">
+                        <h3>Статус загрузки</h3>
+                        <p id="loading-status">Готов к загрузке</p>
+                        <div class="progress-bar">
+                            <div class="progress" id="loading-progress"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="full-image-container" onclick="this.style.display='none'">
+            <img id="full-image">
+        </div>
+    </div>
+
+    <div id="upload" class="tab-content">
+        <div class="upload-container">
+            <h2>Загрузка архивов со снимками</h2>
+            <form class="upload-form" id="uploadForm">
+                <input type="file" class="file-input" id="fileInput" accept=".zip,.tar,.gz" required>
+                <button type="submit" class="upload-button">Загрузить</button>
+            </form>
+            <div id="uploadStatus" class="upload-status" style="display: none;"></div>
+        </div>
+    </div>
+
+    <script>
+        let currentBand = 'B04';
+        let loadedTiles = new Set();
+
+        function getTilePosition(tileName) {
+            // Формат имени: BAND_row_COL.jpg
+            const parts = tileName.split('_');
+            if (parts.length !== 3) return null;
+            
+            const row = parseInt(parts[1]);
+            const col = parseInt(parts[2].split('.')[0]);
+            return { row, col };
+        }
+
+        async function loadTiles() {
+            const response = await fetch(`/tiles?band=${currentBand}`);
+            const data = await response.json();
+            
+            const container = document.getElementById('tile-container');
+            container.innerHTML = "";
+            
+            // Создаем матрицу 18x18
+            const matrix = Array(18).fill().map(() => Array(18).fill(null));
+            
+            // Заполняем матрицу тайлами
+            data.tiles.forEach(tileName => {
+                const pos = getTilePosition(tileName);
+                if (pos) {
+                    matrix[pos.row][pos.col] = tileName;
+                }
+            });
+            
+            // Создаем элементы изображения
+            for (let row = 0; row < 18; row++) {
+                for (let col = 0; col < 18; col++) {
+                    const img = document.createElement('img');
+                    img.className = 'tile loading';
+                    
+                    // Устанавливаем позицию в сетке
+                    img.style.gridRow = row + 1;
+                    img.style.gridColumn = col + 1;
+                    
+                    // Добавляем информацию о позиции
+                    img.setAttribute('data-position', `Строка: ${row}, Столбец: ${col}`);
+                    
+                    const tileName = matrix[row][col];
+                    if (tileName) {
+                        img.onclick = () => showFullImage(img.src);
+                        container.appendChild(img);
+                        loadTileImage(img, tileName);
+                    } else {
+                        // Если тайл отсутствует, показываем пустое место
+                        img.style.backgroundColor = '#f0f0f0';
+                        container.appendChild(img);
+                    }
+                }
+            }
+        }
+
+        async function loadTileImage(img, tileName) {
+            try {
+                const response = await fetch(`/tiles/${tileName}`);
+                if (response.ok) {
+                    const blob = await response.blob();
+                    img.src = URL.createObjectURL(blob);
+                    img.classList.remove('loading');
+                    img.classList.add('loaded');
+                    loadedTiles.add(tileName);
+                    
+                    updateLoadingStatus();
+                }
+            } catch (error) {
+                console.error('Error loading tile:', error);
+            }
+        }
+
+        function updateLoadingStatus() {
+            const status = document.getElementById('loading-status');
+            const progress = document.getElementById('loading-progress');
+            const totalTiles = 18 * 18;
+            const loadedCount = loadedTiles.size;
+            const percentage = (loadedCount / totalTiles) * 100;
+            
+            status.textContent = `Загружено ${loadedCount} из ${totalTiles} тайлов`;
+            progress.style.width = `${percentage}%`;
+        }
+
+        function changeBand() {
+            const bandSelect = document.getElementById('band-select');
+            currentBand = bandSelect.value;
+            loadedTiles.clear();
+            loadTiles();
+        }
+
+        function showFullImage(src) {
+            const fullImageContainer = document.getElementById('full-image-container');
+            document.getElementById('full-image').src = src;
+            fullImageContainer.style.display = 'flex';
+        }
+
+        function showTab(tabName) {
+            // Скрываем все вкладки
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelectorAll('.tab-button').forEach(button => {
+                button.classList.remove('active');
+            });
+
+            // Показываем выбранную вкладку
+            document.getElementById(tabName).classList.add('active');
+            document.querySelector(`button[onclick="showTab('${tabName}')"]`).classList.add('active');
+        }
+
+        // Обработка загрузки файлов
+        document.getElementById('uploadForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const fileInput = document.getElementById('fileInput');
+            const uploadStatus = document.getElementById('uploadStatus');
+            
+            if (!fileInput.files[0]) {
+                showUploadStatus('Пожалуйста, выберите файл', 'error');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (response.ok) {
+                    showUploadStatus('Файл успешно загружен и отправлен на обработку', 'success');
+                    fileInput.value = '';
+                } else {
+                    const error = await response.json();
+                    showUploadStatus(`Ошибка: ${error.detail}`, 'error');
+                }
+            } catch (error) {
+                showUploadStatus('Ошибка при загрузке файла', 'error');
+            }
+        });
+
+        function showUploadStatus(message, type) {
+            const uploadStatus = document.getElementById('uploadStatus');
+            uploadStatus.textContent = message;
+            uploadStatus.className = `upload-status ${type}`;
+            uploadStatus.style.display = 'block';
+        }
+
+        // Инициализация при загрузке страницы
+        loadTiles();
+    </script>
+</body>
+</html>
