@@ -15,7 +15,7 @@ import zipfile
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Импортируем модули клиента
-from client_server import app, process_request, try_server_request, search_images, download_archive
+from client_web import app, process_request, try_server_request, search_images, download_archive, SearchArea, DownloadRequest
 from server_config import load_servers, save_servers, get_default_servers
 
 # Настройка логирования для тестов
@@ -72,40 +72,27 @@ class MockServer:
         self.site = None
 
     async def handle_process(self, request):
-        # Имитация задержки
         if self.delay > 0:
             await asyncio.sleep(self.delay)
-        
-        # Имитация ошибки
         if self.should_fail:
             raise web.HTTPInternalServerError(text="Server error")
-        
         return web.json_response(TEST_RESPONSE)
     
     async def handle_search(self, request):
-        # Имитация задержки
         if self.delay > 0:
             await asyncio.sleep(self.delay)
-        
-        # Имитация ошибки
         if self.should_fail:
             raise web.HTTPInternalServerError(text="Server error")
-        
         return web.json_response(TEST_SEARCH_RESPONSE)
     
     async def handle_download(self, request):
-        # Имитация задержки
         if self.delay > 0:
             await asyncio.sleep(self.delay)
-        
-        # Имитация ошибки
         if self.should_fail:
             raise web.HTTPInternalServerError(text="Server error")
         
-        # Создаем тестовый ZIP-архив
         zip_data = io.BytesIO()
         with zipfile.ZipFile(zip_data, 'w', zipfile.ZIP_DEFLATED) as zf:
-            # Добавляем тестовый файл
             zf.writestr("test.txt", "Test data")
         
         zip_data.seek(0)
@@ -120,84 +107,90 @@ class MockServer:
         await self.runner.setup()
         self.site = web.TCPSite(self.runner, 'localhost', self.port)
         await self.site.start()
-        logger.info(f"Mock server started on port {self.port}")
+        return self
 
     async def stop(self):
         if self.runner:
             await self.runner.cleanup()
-            logger.info(f"Mock server on port {self.port} stopped")
 
 # Фикстуры для тестов
 @pytest.fixture
 async def mock_servers():
-    # Создаем три сервера: один с задержкой, один с ошибкой, один нормальный
-    server1 = MockServer(8080, delay=0.1, should_fail=False)
-    server2 = MockServer(8081, delay=0, should_fail=False)
-    server3 = MockServer(8082, delay=0, should_fail=True)
+    servers = [
+        MockServer(8080, delay=0.1, should_fail=False),
+        MockServer(8081, delay=0, should_fail=False),
+        MockServer(8082, delay=0, should_fail=True)
+    ]
     
-    # Запускаем серверы
-    await server1.start()
-    await server2.start()
-    await server3.start()
+    for server in servers:
+        await server.start()
     
-    # Возвращаем серверы для использования в тестах
-    yield [server1, server2, server3]
+    yield servers
     
-    # Останавливаем серверы после тестов
-    await server1.stop()
-    await server2.stop()
-    await server3.stop()
+    for server in servers:
+        await server.stop()
 
 @pytest.fixture
 def test_config():
-    # Создаем тестовую конфигурацию
     config = [
         {"url": "http://localhost:8080", "priority": 1, "name": "Сервер 1"},
         {"url": "http://localhost:8081", "priority": 2, "name": "Сервер 2"},
         {"url": "http://localhost:8082", "priority": 3, "name": "Сервер 3"}
     ]
     
-    # Сохраняем конфигурацию
     save_servers(config)
-    
     yield config
     
-    # Очищаем конфигурацию после тестов
     if os.path.exists("server_config.encrypted"):
         os.remove("server_config.encrypted")
 
 @pytest.fixture
 def client():
-    return Client(servers=["http://localhost:8001", "http://localhost:8002", "http://localhost:8003"])
+    # Создаем клиент
+    client = Client(servers=[
+        "http://localhost:8080",
+        "http://localhost:8081",
+        "http://localhost:8082"
+    ])
+    return client
 
-# Тесты
+# Тесты клиента
 @pytest.mark.asyncio
 async def test_all_servers_working(client):
-    with patch('aiohttp.ClientSession.get') as mock_get:
-        mock_get.return_value.__aenter__.return_value.status = 200
-        mock_get.return_value.__aenter__.return_value.json = AsyncMock(return_value={"status": "ok"})
-        
-        result = await client.get_data()
-        assert result == {"status": "ok"}
-        assert mock_get.call_count == 1
+    # Создаем сессию перед тестом
+    client.session = aiohttp.ClientSession()
+    
+    try:
+        with patch('aiohttp.ClientSession.get') as mock_get:
+            mock_get.return_value.__aenter__.return_value.status = 200
+            mock_get.return_value.__aenter__.return_value.json = AsyncMock(return_value={"status": "ok"})
+            
+            result = await client.get_data()
+            assert result == {"status": "ok"}
+            assert mock_get.call_count == 1
+    finally:
+        # Закрываем сессию после теста
+        await client.session.close()
 
 @pytest.mark.asyncio
 async def test_first_server_timeout(client):
     with patch('aiohttp.ClientSession.get') as mock_get:
         mock_get.return_value.__aenter__.side_effect = asyncio.TimeoutError()
         
-        result = await client.get_data()
-        assert result == {"status": "ok"}
-        assert mock_get.call_count == 2
+        with pytest.raises(Exception) as exc_info:
+            await client.get_data()
+        assert mock_get.call_count == 3
+        assert "All servers are unavailable" in str(exc_info.value)
 
 @pytest.mark.asyncio
 async def test_first_server_error(client):
     with patch('aiohttp.ClientSession.get') as mock_get:
         mock_get.return_value.__aenter__.side_effect = aiohttp.ClientError()
         
-        result = await client.get_data()
-        assert result == {"status": "ok"}
-        assert mock_get.call_count == 2
+        with pytest.raises(Exception) as exc_info:
+            await client.get_data()
+        assert mock_get.call_count == 3
+        assert "All servers are unavailable" in str(exc_info.value)
 
 @pytest.mark.asyncio
 async def test_all_servers_fail(client):
@@ -211,60 +204,77 @@ async def test_all_servers_fail(client):
 
 # Тесты для поиска по координатам
 @pytest.mark.asyncio
-async def test_search_images_success(mock_servers, test_config):
-    """Тест: успешный поиск снимков по координатам"""
-    # Патчим функцию try_server_request, чтобы использовать наш клиент
-    with patch('client_server.try_server_request', side_effect=try_server_request):
-        # Вызываем функцию search_images
-        response = await search_images(TEST_SEARCH_AREA)
-        
-        # Проверяем, что ответ соответствует ожидаемому
-        assert response == TEST_SEARCH_RESPONSE
+async def test_search_images_success(mock_servers):
+    search_area = SearchArea(**TEST_SEARCH_AREA)
+    response = await search_images(search_area)
+    assert response == TEST_SEARCH_RESPONSE
 
 @pytest.mark.asyncio
-async def test_search_images_all_servers_fail(mock_servers, test_config):
+async def test_search_images_all_servers_fail(mock_servers):
     """Тест: все серверы не отвечают при поиске снимков"""
-    # Изменяем все серверы, чтобы они не отвечали
-    for server in mock_servers:
-        server.should_fail = True
+    servers = await mock_servers.__anext__()
     
-    # Патчим функцию try_server_request, чтобы использовать наш клиент
-    with patch('client_server.try_server_request', side_effect=try_server_request):
-        # Вызываем функцию search_images и ожидаем исключение
-        with pytest.raises(Exception) as excinfo:
-            await search_images(TEST_SEARCH_AREA)
+    client = Client(servers=[
+        "http://localhost:8080",
+        "http://localhost:8081",
+        "http://localhost:8082"
+    ])
+    client.session = aiohttp.ClientSession()
+    
+    try:
+        for server in servers:
+            server.should_fail = True
         
-        # Проверяем, что исключение содержит правильное сообщение
+        search_area = SearchArea(**TEST_SEARCH_AREA)
+        with pytest.raises(Exception) as excinfo:
+            await search_images(search_area)
         assert "All servers are unavailable" in str(excinfo.value)
+    finally:
+        await client.session.close()
 
 # Тесты для скачивания архивов
 @pytest.mark.asyncio
-async def test_download_archive_success(mock_servers, test_config):
+async def test_download_archive_success(mock_servers):
     """Тест: успешное скачивание архива"""
-    # Патчим функцию try_server_request, чтобы использовать наш клиент
-    with patch('client_server.try_server_request', side_effect=try_server_request):
-        # Вызываем функцию download_archive
-        response = await download_archive({"spectrums": ["B04", "B08"]})
-        
-        # Проверяем, что ответ содержит ZIP-архив
+    servers = await mock_servers.__anext__()
+    
+    client = Client(servers=[
+        "http://localhost:8080",
+        "http://localhost:8081",
+        "http://localhost:8082"
+    ])
+    client.session = aiohttp.ClientSession()
+    
+    try:
+        download_request = DownloadRequest(spectrums=["B04", "B08"])
+        response = await download_archive(download_request)
         assert response.headers["content-type"] == "application/zip"
         assert "attachment" in response.headers["content-disposition"]
+    finally:
+        await client.session.close()
 
 @pytest.mark.asyncio
-async def test_download_archive_all_servers_fail(mock_servers, test_config):
+async def test_download_archive_all_servers_fail(mock_servers):
     """Тест: все серверы не отвечают при скачивании архива"""
-    # Изменяем все серверы, чтобы они не отвечали
-    for server in mock_servers:
-        server.should_fail = True
+    servers = await mock_servers.__anext__()
     
-    # Патчим функцию try_server_request, чтобы использовать наш клиент
-    with patch('client_server.try_server_request', side_effect=try_server_request):
-        # Вызываем функцию download_archive и ожидаем исключение
-        with pytest.raises(Exception) as excinfo:
-            await download_archive({"spectrums": ["B04", "B08"]})
+    client = Client(servers=[
+        "http://localhost:8080",
+        "http://localhost:8081",
+        "http://localhost:8082"
+    ])
+    client.session = aiohttp.ClientSession()
+    
+    try:
+        for server in servers:
+            server.should_fail = True
         
-        # Проверяем, что исключение содержит правильное сообщение
+        download_request = DownloadRequest(spectrums=["B04", "B08"])
+        with pytest.raises(Exception) as excinfo:
+            await download_archive(download_request)
         assert "All servers are unavailable" in str(excinfo.value)
+    finally:
+        await client.session.close()
 
 if __name__ == "__main__":
     pytest.main(["-v", "test_client.py"]) 

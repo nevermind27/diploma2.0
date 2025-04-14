@@ -14,6 +14,10 @@ import logging
 from server_config import load_servers, update_servers
 import zipfile
 import io
+from pathlib import Path
+import xml.etree.ElementTree as ET
+from client import Client
+import aiohttp
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -57,17 +61,18 @@ async def try_server_request(server: Dict, endpoint: str, params: Dict) -> Dict:
     try:
         logger.info(f"Отправка запроса к серверу {server['url']}{endpoint}")
         async with asyncio.timeout(REQUEST_TIMEOUT):
-            response = requests.get(f"{server['url']}{endpoint}", params=params)
-            response.raise_for_status()
-            data = response.json()
-            
-            # Проверяем, есть ли в ответе новый список серверов
-            if "servers" in data:
-                logger.info("Получен новый список серверов")
-                update_servers(data["servers"])
-            
-            return data
-    except (requests.RequestException, asyncio.TimeoutError) as e:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"{server['url']}{endpoint}", params=params) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+                    
+                    # Проверяем, есть ли в ответе новый список серверов
+                    if "servers" in data:
+                        logger.info("Получен новый список серверов")
+                        update_servers(data["servers"])
+                    
+                    return data
+    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
         logger.error(f"Ошибка при запросе к серверу {server['url']}: {str(e)}")
         return None
 
@@ -89,11 +94,13 @@ async def upload_file(file: UploadFile = File(...)):
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         
-        # TODO: Здесь будет логика обработки загруженного файла
-        # Например, распаковка архива и обработка снимков
+        # Обрабатываем архив
+        client = Client()
+        await process_safe_archive(file_path, client)
         
-        return {"message": "File uploaded successfully", "filename": filename}
+        return {"message": "File uploaded and processed successfully", "filename": filename}
     except Exception as e:
+        logger.error(f"Ошибка при обработке файла: {str(e)}")
         return {"error": str(e)}
 
 @app.get("/tiles")
@@ -230,6 +237,96 @@ async def download_archive(request: DownloadRequest):
                 media_type="application/zip",
                 filename="sentinel2_archive.zip"
             )
+    
+    logger.error("Все серверы недоступны")
+    raise HTTPException(status_code=503, detail="All servers are unavailable")
+
+async def process_safe_archive(file_path: str, client: Client):
+    """
+    Обработка SAFE архива Sentinel-2
+    
+    Args:
+        file_path: путь к SAFE архиву
+        client: клиент для отправки запросов
+    """
+    try:
+        # Создаем временную директорию для распаковки
+        temp_dir = Path("temp_extract")
+        temp_dir.mkdir(exist_ok=True)
+        
+        # Распаковываем архив
+        with zipfile.ZipFile(file_path, 'r') as zip_ref:
+            zip_ref.extractall(temp_dir)
+        
+        # Читаем метаданные из manifest.safe
+        manifest_path = temp_dir / "manifest.safe"
+        if not manifest_path.exists():
+            raise ValueError("manifest.safe не найден в архиве")
+        
+        # Парсим XML для получения информации о снимке
+        tree = ET.parse(manifest_path)
+        root = tree.getroot()
+        
+        # Получаем информацию о снимке
+        namespace = {'safe': 'http://www.esa.int/safe/sentinel-1.0'}
+        data_object_section = root.find('.//safe:dataObjectSection', namespace)
+        
+        if data_object_section is None:
+            raise ValueError("Не удалось найти информацию о снимке в manifest.safe")
+        
+        # Обрабатываем каждый спектр
+        for data_object in data_object_section.findall('.//safe:dataObject', namespace):
+            # Получаем имя файла и тип данных
+            file_name = data_object.find('.//safe:fileLocation', namespace).get('href')
+            data_type = data_object.find('.//safe:dataType', namespace).text
+            
+            # Формируем полный путь к файлу
+            file_path = temp_dir / file_name
+            
+            if not file_path.exists():
+                logger.warning(f"Файл не найден: {file_path}")
+                continue
+            
+            # Формируем данные для отправки
+            data = {
+                "snapshot_id": os.path.basename(file_path).split('.')[0],
+                "spectrum": data_type,
+                "file_name": os.path.basename(file_path)
+            }
+            
+            # Отправляем файл на сервер через клиент
+            try:
+                with open(file_path, 'rb') as f:
+                    files = {'file': (os.path.basename(file_path), f, 'application/octet-stream')}
+                    await client.upload_file(data=data, files=files)
+                    logger.info(f"Файл {file_path} успешно отправлен")
+            except Exception as e:
+                logger.error(f"Ошибка при отправке файла {file_path}: {str(e)}")
+        
+    except Exception as e:
+        logger.error(f"Ошибка при обработке архива: {str(e)}")
+        raise
+    finally:
+        # Очищаем временную директорию
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
+
+@app.get("/available-archives")
+async def get_available_archives():
+    """
+    Получение списка доступных архивов
+    """
+    # Загружаем список серверов из конфигурации
+    servers = load_servers()
+    logger.info(f"Загружен список серверов: {servers}")
+    
+    # Пробуем подключиться к каждому серверу по очереди
+    for i, server in enumerate(servers):
+        logger.info(f"Попытка подключения к серверу {i+1}/{len(servers)}: {server['url']} (приоритет: {server['priority']})")
+        result = await try_server_request(server, "/available-archives", {})
+        if result is not None:
+            logger.info(f"Успешный ответ от сервера {server['url']}")
+            return result
     
     logger.error("Все серверы недоступны")
     raise HTTPException(status_code=503, detail="All servers are unavailable")

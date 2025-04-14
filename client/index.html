@@ -269,6 +269,19 @@
     <div id="download" class="tab-content">
         <div class="container">
             <h2>Скачивание архивов</h2>
+            
+            <!-- Секция для отображения доступных архивов -->
+            <div class="available-archives-section" style="margin-bottom: 20px;">
+                <h3>Доступные архивы</h3>
+                <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                    <input type="text" id="archive-search" placeholder="Поиск по названию архива..." style="flex-grow: 1; padding: 8px;">
+                    <button onclick="loadAvailableArchives()" class="upload-button">Обновить список</button>
+                </div>
+                <div id="archives-list" style="max-height: 300px; overflow-y: auto; border: 1px solid #ddd; border-radius: 5px; padding: 10px;">
+                    <!-- Здесь будет отображаться список архивов -->
+                </div>
+            </div>
+
             <div class="spectrum-selector">
                 <h3>Выберите спектры для скачивания:</h3>
                 <div class="spectrum-checkbox">
@@ -801,6 +814,87 @@
                 alert('Ошибка при скачивании архива: ' + error.message);
             }
         }
+
+        async function loadAvailableArchives() {
+            try {
+                const response = await fetch('/available-archives');
+                const data = await response.json();
+                
+                const archivesList = document.getElementById('archives-list');
+                archivesList.innerHTML = '';
+                
+                if (data.error) {
+                    archivesList.innerHTML = `<p style="color: red">${data.error}</p>`;
+                    return;
+                }
+                
+                if (data.archives && data.archives.length > 0) {
+                    const table = document.createElement('table');
+                    table.style.width = '100%';
+                    table.style.borderCollapse = 'collapse';
+                    
+                    // Заголовок таблицы
+                    const thead = document.createElement('thead');
+                    thead.innerHTML = `
+                        <tr>
+                            <th style="padding: 8px; border: 1px solid #ddd;">Название архива</th>
+                            <th style="padding: 8px; border: 1px solid #ddd;">Дата</th>
+                            <th style="padding: 8px; border: 1px solid #ddd;">Доступные спектры</th>
+                            <th style="padding: 8px; border: 1px solid #ddd;">Действия</th>
+                        </tr>
+                    `;
+                    table.appendChild(thead);
+                    
+                    // Тело таблицы
+                    const tbody = document.createElement('tbody');
+                    data.archives.forEach(archive => {
+                        const tr = document.createElement('tr');
+                        tr.innerHTML = `
+                            <td style="padding: 8px; border: 1px solid #ddd;">${archive.name}</td>
+                            <td style="padding: 8px; border: 1px solid #ddd;">${archive.date}</td>
+                            <td style="padding: 8px; border: 1px solid #ddd;">${archive.spectrums.join(', ')}</td>
+                            <td style="padding: 8px; border: 1px solid #ddd;">
+                                <button onclick="selectArchive('${archive.id}')" class="upload-button" style="padding: 5px 10px;">Выбрать</button>
+                            </td>
+                        `;
+                        tbody.appendChild(tr);
+                    });
+                    table.appendChild(tbody);
+                    archivesList.appendChild(table);
+                } else {
+                    archivesList.innerHTML = '<p>Нет доступных архивов</p>';
+                }
+            } catch (error) {
+                console.error('Ошибка при загрузке списка архивов:', error);
+                document.getElementById('archives-list').innerHTML = '<p style="color: red">Ошибка при загрузке списка архивов</p>';
+            }
+        }
+
+        function selectArchive(archiveId) {
+            // Здесь будет логика выбора архива
+            // Можно добавить автоматическое заполнение чекбоксов спектров
+            alert('Функция выбора архива будет реализована позже');
+        }
+
+        // Добавляем обработчик поиска
+        document.getElementById('archive-search').addEventListener('input', function(e) {
+            const searchText = e.target.value.toLowerCase();
+            const rows = document.querySelectorAll('#archives-list tbody tr');
+            
+            rows.forEach(row => {
+                const archiveName = row.cells[0].textContent.toLowerCase();
+                if (archiveName.includes(searchText)) {
+                    row.style.display = '';
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+        });
+
+        // Загружаем список архивов при открытии вкладки
+        document.querySelector('.tab-button[onclick="showTab(\'download\')"]').addEventListener('click', function() {
+            loadAvailableArchives();
+        });
 
         // Инициализация при загрузке страницы
         loadTiles();
