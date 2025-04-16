@@ -1,6 +1,11 @@
 import aiohttp
 import asyncio
 import logging
+import zipfile
+import io
+from pathlib import Path
+import tempfile
+import shutil
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -87,17 +92,51 @@ class Client:
         """
         return await self.get_data(endpoint="/search", params=area)
     
-    async def download_archive(self, spectrums):
+    async def get_available_archives(self, search_query: str = None) -> dict:
+        """
+        Получение списка доступных архивов.
+        
+        Args:
+            search_query (str, optional): Поисковый запрос для фильтрации архивов
+            
+        Returns:
+            dict: Словарь с информацией об архивах
+        """
+        params = {}
+        if search_query:
+            params['search'] = search_query
+            
+        return await self.get_data(endpoint="/available-archives", params=params)
+    
+    async def get_archive_info(self, archive_id: str) -> dict:
+        """
+        Получение информации о конкретном архиве.
+        
+        Args:
+            archive_id (str): ID архива
+            
+        Returns:
+            dict: Информация об архиве
+        """
+        return await self.get_data(endpoint=f"/archive/{archive_id}")
+    
+    async def download_archive(self, archive_id: str, spectrums: list) -> bytes:
         """
         Скачивание архива с выбранными спектрами.
         
         Args:
+            archive_id (str): ID архива
             spectrums (list): Список выбранных спектров
             
         Returns:
-            bytes: Данные архива
+            bytes: Данные архива в формате ZIP
         """
-        response = await self.get_data(endpoint="/download", params={"spectrums": spectrums})
+        data = {
+            "archive_id": archive_id,
+            "spectrums": spectrums
+        }
+        
+        response = await self.get_data(endpoint="/download", params=data)
         return response
     
     async def upload_file(self, endpoint="/upload", data=None, files=None, timeout=30):
@@ -151,4 +190,40 @@ class Client:
                 logger.error(f"Неожиданная ошибка при отправке файла на сервер {server_url}: {str(e)}")
                 last_error = str(e)
         
-        raise Exception(f"All servers are unavailable. Last error: {last_error}") 
+        raise Exception(f"All servers are unavailable. Last error: {last_error}")
+    
+    async def get_tile(self, image_id: str, x1: float, y1: float, x2: float, y2: float) -> bytes:
+        """
+        Получение тайла снимка по координатам
+        
+        Args:
+            image_id (str): ID снимка
+            x1 (float): X координата верхнего левого угла
+            y1 (float): Y координата верхнего левого угла
+            x2 (float): X координата нижнего правого угла
+            y2 (float): Y координата нижнего правого угла
+            
+        Returns:
+            bytes: Данные тайла
+        """
+        params = {
+            "x1": x1,
+            "y1": y1,
+            "x2": x2,
+            "y2": y2
+        }
+        
+        response = await self.get_data(endpoint=f"/tile/{image_id}", params=params)
+        return response
+    
+    async def view_image(self, image_id: str) -> dict:
+        """
+        Получение информации о снимке для просмотра
+        
+        Args:
+            image_id (str): ID снимка
+            
+        Returns:
+            dict: Информация о снимке
+        """
+        return await self.get_data(endpoint=f"/view-image/{image_id}") 

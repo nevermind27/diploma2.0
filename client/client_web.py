@@ -331,6 +331,53 @@ async def get_available_archives():
     logger.error("Все серверы недоступны")
     raise HTTPException(status_code=503, detail="All servers are unavailable")
 
+@app.get("/view-image/{image_id}")
+async def view_image(image_id: str):
+    """
+    Получение информации о снимке для просмотра
+    """
+    # Загружаем список серверов из конфигурации
+    servers = load_servers()
+    logger.info(f"Загружен список серверов: {servers}")
+    
+    # Пробуем подключиться к каждому серверу по очереди
+    for i, server in enumerate(servers):
+        logger.info(f"Попытка подключения к серверу {i+1}/{len(servers)}: {server['url']}")
+        result = await try_server_request(server, f"/view-image/{image_id}", {})
+        if result is not None:
+            logger.info(f"Успешный ответ от сервера {server['url']}")
+            return result
+    
+    logger.error("Все серверы недоступны")
+    raise HTTPException(status_code=503, detail="All servers are unavailable")
+
+@app.get("/tile/{image_id}")
+async def get_tile(image_id: str, x1: float, y1: float, x2: float, y2: float):
+    """
+    Получение тайла снимка по координатам
+    """
+    # Загружаем список серверов из конфигурации
+    servers = load_servers()
+    logger.info(f"Загружен список серверов: {servers}")
+    
+    params = {
+        "x1": x1,
+        "y1": y1,
+        "x2": x2,
+        "y2": y2
+    }
+    
+    # Пробуем подключиться к каждому серверу по очереди
+    for i, server in enumerate(servers):
+        logger.info(f"Попытка подключения к серверу {i+1}/{len(servers)}: {server['url']}")
+        result = await try_server_request(server, f"/tile/{image_id}", params)
+        if result is not None:
+            logger.info(f"Успешный ответ от сервера {server['url']}")
+            return result
+    
+    logger.error("Все серверы недоступны")
+    raise HTTPException(status_code=503, detail="All servers are unavailable")
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000) 

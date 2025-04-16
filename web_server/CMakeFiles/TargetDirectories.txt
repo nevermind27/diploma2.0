@@ -1,0 +1,3 @@
+/Users/elizavetaomelcenko/diploma2/web-server/CMakeFiles/final.dir
+/Users/elizavetaomelcenko/diploma2/web-server/CMakeFiles/edit_cache.dir
+/Users/elizavetaomelcenko/diploma2/web-server/CMakeFiles/rebuild_cache.dir

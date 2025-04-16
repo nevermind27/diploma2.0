@@ -217,7 +217,10 @@
             <h1>Просмотр Sentinel-2</h1>
             
             <div class="viewer-section">
-                <div id="tile-container"></div>
+                <div id="image-container" style="position: relative;">
+                    <img id="main-image" style="max-width: 100%;">
+                    <div id="grid-overlay" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none;"></div>
+                </div>
                 
                 <div class="controls">
                     <div class="band-selector">
@@ -270,18 +273,21 @@
         <div class="container">
             <h2>Скачивание архивов</h2>
             
-            <!-- Секция для отображения доступных архивов -->
-            <div class="available-archives-section" style="margin-bottom: 20px;">
-                <h3>Доступные архивы</h3>
-                <div style="display: flex; gap: 10px; margin-bottom: 10px;">
-                    <input type="text" id="archive-search" placeholder="Поиск по названию архива..." style="flex-grow: 1; padding: 8px;">
-                    <button onclick="loadAvailableArchives()" class="upload-button">Обновить список</button>
-                </div>
-                <div id="archives-list" style="max-height: 300px; overflow-y: auto; border: 1px solid #ddd; border-radius: 5px; padding: 10px;">
-                    <!-- Здесь будет отображаться список архивов -->
-                </div>
+            <div class="controls" style="margin-bottom: 20px;">
+                <button onclick="showAvailableArchives()" class="upload-button">Показать доступные архивы</button>
             </div>
-
+            
+            <div id="available-archives" style="display: none;">
+                <h3>Доступные архивы:</h3>
+                <div id="archives-list" style="margin-top: 10px;"></div>
+            </div>
+            
+            <!-- Добавляем поиск по названию -->
+            <div class="search-container" style="margin-bottom: 20px;">
+                <input type="text" id="archive-search" placeholder="Поиск по названию архива..." style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px;">
+                <div id="archive-search-results" style="margin-top: 10px;"></div>
+            </div>
+            
             <div class="spectrum-selector">
                 <h3>Выберите спектры для скачивания:</h3>
                 <div class="spectrum-checkbox">
@@ -746,6 +752,7 @@
                     <td style="padding: 8px; border: 1px solid #ddd;">${image.date}</td>
                     <td style="padding: 8px; border: 1px solid #ddd;">${image.coordinates.lat.toFixed(4)}, ${image.coordinates.lon.toFixed(4)}</td>
                     <td style="padding: 8px; border: 1px solid #ddd;">
+                        <button onclick="viewImage('${image.id}', '${image.name}')" class="upload-button" style="padding: 5px 10px; margin-right: 5px;">Просмотр</button>
                         <button onclick="downloadImage('${image.id}')" class="upload-button" style="padding: 5px 10px;">Скачать</button>
                     </td>
                 `;
@@ -815,86 +822,186 @@
             }
         }
 
-        async function loadAvailableArchives() {
+        // Добавляем обработчик поиска архивов
+        document.getElementById('archive-search').addEventListener('input', async function(e) {
+            const searchText = e.target.value.trim();
+            const resultsDiv = document.getElementById('archive-search-results');
+            
+            if (searchText.length < 2) {
+                resultsDiv.innerHTML = '';
+                return;
+            }
+            
             try {
-                const response = await fetch('/available-archives');
-                const data = await response.json();
-                
-                const archivesList = document.getElementById('archives-list');
-                archivesList.innerHTML = '';
-                
-                if (data.error) {
-                    archivesList.innerHTML = `<p style="color: red">${data.error}</p>`;
-                    return;
-                }
-                
-                if (data.archives && data.archives.length > 0) {
-                    const table = document.createElement('table');
-                    table.style.width = '100%';
-                    table.style.borderCollapse = 'collapse';
+                const response = await fetch(`/available-archives?search=${searchText}`);
+                if (response.ok) {
+                    const data = await response.json();
                     
-                    // Заголовок таблицы
-                    const thead = document.createElement('thead');
-                    thead.innerHTML = `
-                        <tr>
-                            <th style="padding: 8px; border: 1px solid #ddd;">Название архива</th>
-                            <th style="padding: 8px; border: 1px solid #ddd;">Дата</th>
-                            <th style="padding: 8px; border: 1px solid #ddd;">Доступные спектры</th>
-                            <th style="padding: 8px; border: 1px solid #ddd;">Действия</th>
-                        </tr>
-                    `;
-                    table.appendChild(thead);
-                    
-                    // Тело таблицы
-                    const tbody = document.createElement('tbody');
-                    data.archives.forEach(archive => {
-                        const tr = document.createElement('tr');
-                        tr.innerHTML = `
-                            <td style="padding: 8px; border: 1px solid #ddd;">${archive.name}</td>
-                            <td style="padding: 8px; border: 1px solid #ddd;">${archive.date}</td>
-                            <td style="padding: 8px; border: 1px solid #ddd;">${archive.spectrums.join(', ')}</td>
-                            <td style="padding: 8px; border: 1px solid #ddd;">
-                                <button onclick="selectArchive('${archive.id}')" class="upload-button" style="padding: 5px 10px;">Выбрать</button>
-                            </td>
-                        `;
-                        tbody.appendChild(tr);
-                    });
-                    table.appendChild(tbody);
-                    archivesList.appendChild(table);
+                    if (data.archives && data.archives.length > 0) {
+                        let html = '<div style="background: white; padding: 10px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">';
+                        html += '<h4>Найденные архивы:</h4>';
+                        html += '<ul style="list-style: none; padding: 0;">';
+                        
+                        data.archives.forEach(archive => {
+                            html += `<li style="padding: 5px 0; border-bottom: 1px solid #eee;">
+                                <input type="checkbox" id="archive_${archive.id}" value="${archive.id}">
+                                <label for="archive_${archive.id}">${archive.name} (${archive.date})</label>
+                            </li>`;
+                        });
+                        
+                        html += '</ul></div>';
+                        resultsDiv.innerHTML = html;
+                    } else {
+                        resultsDiv.innerHTML = '<p style="color: #666;">Архивы не найдены</p>';
+                    }
                 } else {
-                    archivesList.innerHTML = '<p>Нет доступных архивов</p>';
+                    resultsDiv.innerHTML = '<p style="color: red;">Ошибка при поиске архивов</p>';
                 }
             } catch (error) {
-                console.error('Ошибка при загрузке списка архивов:', error);
-                document.getElementById('archives-list').innerHTML = '<p style="color: red">Ошибка при загрузке списка архивов</p>';
+                resultsDiv.innerHTML = `<p style="color: red;">Ошибка: ${error.message}</p>`;
+            }
+        });
+
+        async function viewImage(imageId, imageName) {
+            // Переключаемся на вкладку просмотра
+            showTab('viewer');
+            
+            // Обновляем заголовок
+            document.querySelector('#viewer h1').textContent = `Просмотр ${imageName}`;
+            
+            // Загружаем снимок
+            try {
+                const response = await fetch(`/view-image/${imageId}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    
+                    // Отображаем основной снимок
+                    const mainImage = document.getElementById('main-image');
+                    mainImage.src = `data:image/jpeg;base64,${data.image}`;
+                    
+                    // Создаем сетку
+                    createGrid(data.grid_size);
+                    
+                    // Добавляем обработчик клика по сетке
+                    mainImage.onclick = function(e) {
+                        const rect = mainImage.getBoundingClientRect();
+                        const x = (e.clientX - rect.left) / rect.width;
+                        const y = (e.clientY - rect.top) / rect.height;
+                        
+                        // Вычисляем координаты тайла
+                        const tileSize = 1 / data.grid_size;
+                        const tileX = Math.floor(x / tileSize);
+                        const tileY = Math.floor(y / tileSize);
+                        
+                        // Загружаем тайл
+                        loadTile(imageId, tileX, tileY, tileSize);
+                    };
+                } else {
+                    alert('Ошибка при загрузке снимка');
+                }
+            } catch (error) {
+                alert('Ошибка при загрузке снимка: ' + error.message);
             }
         }
-
-        function selectArchive(archiveId) {
-            // Здесь будет логика выбора архива
-            // Можно добавить автоматическое заполнение чекбоксов спектров
-            alert('Функция выбора архива будет реализована позже');
-        }
-
-        // Добавляем обработчик поиска
-        document.getElementById('archive-search').addEventListener('input', function(e) {
-            const searchText = e.target.value.toLowerCase();
-            const rows = document.querySelectorAll('#archives-list tbody tr');
+        
+        function createGrid(size) {
+            const gridOverlay = document.getElementById('grid-overlay');
+            gridOverlay.innerHTML = '';
             
-            rows.forEach(row => {
-                const archiveName = row.cells[0].textContent.toLowerCase();
-                if (archiveName.includes(searchText)) {
-                    row.style.display = '';
-                } else {
-                    row.style.display = 'none';
+            const tileSize = 100 / size;
+            
+            for (let i = 0; i < size; i++) {
+                for (let j = 0; j < size; j++) {
+                    const tile = document.createElement('div');
+                    tile.style.position = 'absolute';
+                    tile.style.left = `${j * tileSize}%`;
+                    tile.style.top = `${i * tileSize}%`;
+                    tile.style.width = `${tileSize}%`;
+                    tile.style.height = `${tileSize}%`;
+                    tile.style.border = '1px solid rgba(255, 255, 255, 0.3)';
+                    tile.style.boxSizing = 'border-box';
+                    tile.style.pointerEvents = 'auto';
+                    tile.style.cursor = 'pointer';
+                    gridOverlay.appendChild(tile);
                 }
+            }
+        }
+        
+        async function loadTile(imageId, tileX, tileY, tileSize) {
+            try {
+                // Вычисляем координаты тайла
+                const x1 = tileX * tileSize;
+                const y1 = tileY * tileSize;
+                const x2 = (tileX + 1) * tileSize;
+                const y2 = (tileY + 1) * tileSize;
+                
+                // Запускаем анимацию передачи данных
+                startDataTransferAnimation();
+                
+                // Загружаем тайл
+                const response = await fetch(`/tile/${imageId}?x1=${x1}&y1=${y1}&x2=${x2}&y2=${y2}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    
+                    // Обновляем изображение
+                    const mainImage = document.getElementById('main-image');
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+                    
+                    // Загружаем основное изображение
+                    const img = new Image();
+                    img.src = mainImage.src;
+                    await new Promise(resolve => img.onload = resolve);
+                    
+                    // Создаем canvas с тем же размером
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    
+                    // Копируем основное изображение
+                    ctx.drawImage(img, 0, 0);
+                    
+                    // Загружаем и рисуем тайл
+                    const tileImg = new Image();
+                    tileImg.src = `data:image/jpeg;base64,${data.tile}`;
+                    await new Promise(resolve => tileImg.onload = resolve);
+                    
+                    // Вычисляем позицию тайла
+                    const tileWidth = img.width * tileSize;
+                    const tileHeight = img.height * tileSize;
+                    const tileXPos = img.width * x1;
+                    const tileYPos = img.height * y1;
+                    
+                    // Рисуем тайл
+                    ctx.drawImage(tileImg, tileXPos, tileYPos, tileWidth, tileHeight);
+                    
+                    // Обновляем основное изображение
+                    mainImage.src = canvas.toDataURL();
+                    
+                    // Останавливаем анимацию
+                    stopDataTransferAnimation();
+                } else {
+                    alert('Ошибка при загрузке тайла');
+                    stopDataTransferAnimation();
+                }
+            } catch (error) {
+                alert('Ошибка при загрузке тайла: ' + error.message);
+                stopDataTransferAnimation();
+            }
+        }
+        
+        function startDataTransferAnimation() {
+            const packets = document.querySelectorAll('.data-packet');
+            packets.forEach(packet => {
+                packet.style.animation = 'movePacket 2s linear infinite';
             });
-        });
-
-        // Загружаем список архивов при открытии вкладки
-        document.querySelector('.tab-button[onclick="showTab(\'download\')"]').addEventListener('click', function() {
-            loadAvailableArchives();
-        });
+        }
+        
+        function stopDataTransferAnimation() {
+            const packets = document.querySelectorAll('.data-packet');
+            packets.forEach(packet => {
+                packet.style.animation = 'none';
+            });
+        }
 
         // Инициализация при загрузке страницы
         loadTiles();
@@ -902,6 +1009,60 @@
         // Инициализируем карту при загрузке страницы, если активна вкладка поиска
         if (document.getElementById('search').classList.contains('active')) {
             setTimeout(initMap, 100);
+        }
+
+        // Добавляем функцию для отображения доступных архивов
+        async function showAvailableArchives() {
+            const archivesDiv = document.getElementById('available-archives');
+            const archivesList = document.getElementById('archives-list');
+            
+            try {
+                const response = await fetch('/available-archives');
+                if (response.ok) {
+                    const data = await response.json();
+                    
+                    if (data.archives && data.archives.length > 0) {
+                        let html = '<div style="background: white; padding: 20px; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">';
+                        html += '<table style="width: 100%; border-collapse: collapse;">';
+                        html += '<thead><tr>';
+                        html += '<th style="padding: 10px; border: 1px solid #ddd; text-align: left;">Название</th>';
+                        html += '<th style="padding: 10px; border: 1px solid #ddd; text-align: left;">Дата</th>';
+                        html += '<th style="padding: 10px; border: 1px solid #ddd; text-align: left;">Размер</th>';
+                        html += '<th style="padding: 10px; border: 1px solid #ddd; text-align: left;">Действия</th>';
+                        html += '</tr></thead><tbody>';
+                        
+                        data.archives.forEach(archive => {
+                            html += `<tr>
+                                <td style="padding: 10px; border: 1px solid #ddd;">${archive.name}</td>
+                                <td style="padding: 10px; border: 1px solid #ddd;">${archive.date}</td>
+                                <td style="padding: 10px; border: 1px solid #ddd;">${archive.size}</td>
+                                <td style="padding: 10px; border: 1px solid #ddd;">
+                                    <button onclick="selectArchive('${archive.id}')" class="upload-button" style="padding: 5px 10px;">Выбрать</button>
+                                </td>
+                            </tr>`;
+                        });
+                        
+                        html += '</tbody></table></div>';
+                        archivesList.innerHTML = html;
+                        archivesDiv.style.display = 'block';
+                    } else {
+                        archivesList.innerHTML = '<p style="color: #666;">Нет доступных архивов</p>';
+                        archivesDiv.style.display = 'block';
+                    }
+                } else {
+                    archivesList.innerHTML = '<p style="color: red;">Ошибка при загрузке списка архивов</p>';
+                    archivesDiv.style.display = 'block';
+                }
+            } catch (error) {
+                archivesList.innerHTML = `<p style="color: red;">Ошибка: ${error.message}</p>`;
+                archivesDiv.style.display = 'block';
+            }
+        }
+        
+        function selectArchive(archiveId) {
+            // Здесь можно добавить логику для выбора архива
+            // Например, предварительное заполнение формы или фильтрацию спектров
+            alert(`Выбран архив с ID: ${archiveId}`);
         }
     </script>
 </body>

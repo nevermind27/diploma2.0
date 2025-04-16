@@ -1,0 +1,5 @@
+S2B_MSIL1C_20230519T075609_N0509_R035_T38UMU_20230519T085529.SAFE
+get-pip.py
+.pytest_cache
+client/uploads
+client/__pycache__
