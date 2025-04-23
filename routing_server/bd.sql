@@ -4,7 +4,8 @@ CREATE TABLE IF NOT EXISTS Images (
     filename TEXT NOT NULL,
     source TEXT NOT NULL,
     timestamp TIMESTAMP NOT NULL,
-    coordinates TEXT NOT NULL
+    latitude FLOAT NOT NULL,
+    longitude FLOAT NOT NULL
 );
 
 -- Создание таблицы Servers
