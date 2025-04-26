@@ -6,6 +6,8 @@ import io
 from pathlib import Path
 import tempfile
 import shutil
+import json
+from typing import List, Dict, Optional
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -17,14 +19,14 @@ class Client:
     Поддерживает отказоустойчивость при сбоях серверов.
     """
     
-    def __init__(self, servers=None):
+    def __init__(self, base_url: str):
         """
         Инициализация клиента.
         
         Args:
-            servers (list): Список URL серверов в порядке приоритета
+            base_url (str): Базовый URL сервера
         """
-        self.servers = servers or []
+        self.base_url = base_url.rstrip('/')
         self.session = None
     
     async def __aenter__(self):
@@ -226,4 +228,143 @@ class Client:
         Returns:
             dict: Информация о снимке
         """
-        return await self.get_data(endpoint=f"/view-image/{image_id}") 
+        return await self.get_data(endpoint=f"/view-image/{image_id}")
+    
+    async def get_all_images(self) -> List[Dict]:
+        """
+        Получение списка всех доступных снимков
+        GET /images
+        """
+        try:
+            async with self.session.get(f"{self.base_url}/images") as response:
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    logger.error(f"Ошибка при получении списка изображений: {response.status}")
+                    return []
+        except Exception as e:
+            logger.error(f"Ошибка при запросе списка изображений: {str(e)}")
+            return []
+    
+    async def search_images_by_coordinates(self, min_lat: float, max_lat: float, 
+                                         min_lon: float, max_lon: float) -> List[Dict]:
+        """
+        Поиск снимка в определённой области (по координатам)
+        GET /images/search?min_lat=55.5&max_lat=56.0&min_lon=37.2&max_lon=38.1
+        """
+        try:
+            params = {
+                "min_lat": min_lat,
+                "max_lat": max_lat,
+                "min_lon": min_lon,
+                "max_lon": max_lon
+            }
+            async with self.session.get(f"{self.base_url}/images/search", params=params) as response:
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    logger.error(f"Ошибка при поиске изображений по координатам: {response.status}")
+                    return []
+        except Exception as e:
+            logger.error(f"Ошибка при поиске изображений по координатам: {str(e)}")
+            return []
+    
+    async def search_images_by_name(self, name: str) -> List[Dict]:
+        """
+        Поиск по названию снимка
+        GET /images/search?name=landsat_2024_04_10
+        """
+        try:
+            params = {"name": name}
+            async with self.session.get(f"{self.base_url}/images/search", params=params) as response:
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    logger.error(f"Ошибка при поиске изображений по имени: {response.status}")
+                    return []
+        except Exception as e:
+            logger.error(f"Ошибка при поиске изображений по имени: {str(e)}")
+            return []
+    
+    async def get_image_with_spectrums(self, image_id: str, bands: List[str]) -> Optional[Dict]:
+        """
+        Получение снимка с выбранными спектрами
+        GET /images/12345?bands=R,G,B
+        """
+        try:
+            params = {"bands": ",".join(bands)}
+            async with self.session.get(f"{self.base_url}/images/{image_id}", params=params) as response:
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    logger.error(f"Ошибка при получении изображения со спектрами: {response.status}")
+                    return None
+        except Exception as e:
+            logger.error(f"Ошибка при получении изображения со спектрами: {str(e)}")
+            return None
+    
+    async def upload_image(self, file_path: str, metadata: Dict) -> Optional[Dict]:
+        """
+        Загрузка нового снимка в хранилище
+        POST /images/upload
+        Content-Type: multipart/form-data
+        """
+        try:
+            file_path = Path(file_path)
+            if not file_path.exists():
+                logger.error(f"Файл не найден: {file_path}")
+                return None
+            
+            data = aiohttp.FormData()
+            data.add_field('file',
+                         open(file_path, 'rb'),
+                         filename=file_path.name,
+                         content_type='application/octet-stream')
+            
+            # Добавляем метаданные
+            for key, value in metadata.items():
+                data.add_field(key, str(value))
+            
+            async with self.session.post(f"{self.base_url}/images/upload", data=data) as response:
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    logger.error(f"Ошибка при загрузке изображения: {response.status}")
+                    return None
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке изображения: {str(e)}")
+            return None
+
+# Пример использования:
+async def main():
+    async with Client("http://localhost:8080") as client:
+        # Получение списка всех изображений
+        images = await client.get_all_images()
+        print("Все изображения:", images)
+        
+        # Поиск по координатам
+        search_results = await client.search_images_by_coordinates(55.5, 56.0, 37.2, 38.1)
+        print("Результаты поиска по координатам:", search_results)
+        
+        # Поиск по имени
+        name_results = await client.search_images_by_name("landsat_2024_04_10")
+        print("Результаты поиска по имени:", name_results)
+        
+        # Получение изображения со спектрами
+        image = await client.get_image_with_spectrums("12345", ["R", "G", "B"])
+        print("Изображение со спектрами:", image)
+        
+        # Загрузка нового изображения
+        metadata = {
+            "source": "landsat",
+            "timestamp": "2024-04-10T12:00:00Z",
+            "north_lat": 56.0,
+            "south_lat": 55.5,
+            "east_lon": 38.1,
+            "west_lon": 37.2
+        }
+        upload_result = await client.upload_image("path/to/image.tif", metadata)
+        print("Результат загрузки:", upload_result)
+
+if __name__ == "__main__":
+    asyncio.run(main()) 

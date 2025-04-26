@@ -4,8 +4,10 @@ CREATE TABLE IF NOT EXISTS Images (
     filename TEXT NOT NULL,
     source TEXT NOT NULL,
     timestamp TIMESTAMP NOT NULL,
-    latitude FLOAT NOT NULL,
-    longitude FLOAT NOT NULL
+    north_lat FLOAT NOT NULL,  -- северная широта
+    south_lat FLOAT NOT NULL,  -- южная широта
+    east_lon FLOAT NOT NULL,   -- восточная долгота
+    west_lon FLOAT NOT NULL 
 );
 
 -- Создание таблицы Servers
