@@ -8,6 +8,7 @@ import tempfile
 import shutil
 import json
 from typing import List, Dict, Optional
+import os
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -303,37 +304,65 @@ class Client:
             logger.error(f"Ошибка при получении изображения со спектрами: {str(e)}")
             return None
     
-    async def upload_image(self, file_path: str, metadata: Dict) -> Optional[Dict]:
+    async def upload_image(self, file_path: str, metadata: Dict, headers: Dict = None) -> bool:
         """
-        Загрузка нового снимка в хранилище
-        POST /images/upload
-        Content-Type: multipart/form-data
+        Отправляет файл на сервер с метаданными
+        
+        Args:
+            file_path: путь к файлу
+            metadata: словарь с метаданными
+            headers: дополнительные HTTP-заголовки
+            
+        Returns:
+            bool: True если загрузка успешна, False в противном случае
         """
         try:
-            file_path = Path(file_path)
-            if not file_path.exists():
-                logger.error(f"Файл не найден: {file_path}")
-                return None
+            # Загружаем список серверов
+            servers = load_servers()
             
-            data = aiohttp.FormData()
-            data.add_field('file',
-                         open(file_path, 'rb'),
-                         filename=file_path.name,
-                         content_type='application/octet-stream')
+            # Подготавливаем данные для отправки
+            data = {
+                "snapshot_id": metadata.get("snapshot_id", ""),
+                "spectrum": metadata.get("band", ""),
+                "timestamp": metadata.get("timestamp", ""),
+                "coordinates": {
+                    "north": metadata.get("north_lat", ""),
+                    "south": metadata.get("south_lat", ""),
+                    "east": metadata.get("east_lon", ""),
+                    "west": metadata.get("west_lon", "")
+                }
+            }
             
-            # Добавляем метаданные
-            for key, value in metadata.items():
-                data.add_field(key, str(value))
+            # Открываем файл
+            with open(file_path, 'rb') as f:
+                files = {'file': (os.path.basename(file_path), f, 'application/octet-stream')}
+                
+                # Пробуем отправить на каждый сервер
+                for server in servers:
+                    try:
+                        url = f"{server['url']}/upload"
+                        
+                        # Добавляем базовые заголовки
+                        request_headers = {
+                            "X-Spectrum": metadata.get("band", "")
+                        }
+                        
+                        # Добавляем дополнительные заголовки, если они есть
+                        if headers:
+                            request_headers.update(headers)
+                        
+                        async with aiohttp.ClientSession() as session:
+                            async with session.post(url, data=data, files=files, headers=request_headers) as response:
+                                if response.status == 200:
+                                    return True
+                    except Exception as e:
+                        logger.error(f"Ошибка при отправке на сервер {server['url']}: {str(e)}")
+                        continue
             
-            async with self.session.post(f"{self.base_url}/images/upload", data=data) as response:
-                if response.status == 200:
-                    return await response.json()
-                else:
-                    logger.error(f"Ошибка при загрузке изображения: {response.status}")
-                    return None
+            return False
         except Exception as e:
-            logger.error(f"Ошибка при загрузке изображения: {str(e)}")
-            return None
+            logger.error(f"Ошибка при загрузке файла: {str(e)}")
+            return False
 
 # Пример использования:
 async def main():

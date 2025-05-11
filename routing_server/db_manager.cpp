@@ -240,4 +240,34 @@ int DBManager::insert_spectrum(int image_id, const SpectrumInsertData& data) {
     return spectrum_id;
 }
 
+std::vector<ServerInfo> DBManager::get_servers_by_type(const std::string& storage_type) {
+    std::vector<ServerInfo> servers;
+    
+    try {
+        std::string query = "SELECT server_id, ssd_fullness, ssd_volume, hdd_volume, hdd_fullness, location, class "
+                           "FROM Servers WHERE class = '" + storage_type + "'";
+        
+        pqxx::work txn(*conn);
+        pqxx::result result = txn.exec(query);
+        
+        for (const auto& row : result) {
+            ServerInfo server;
+            server.server_id = row["server_id"].as<int>();
+            server.ssd_fullness = row["ssd_fullness"].as<int>();
+            server.ssd_volume = row["ssd_volume"].as<int>();
+            server.hdd_volume = row["hdd_volume"].as<int>();
+            server.hdd_fullness = row["hdd_fullness"].as<int>();
+            server.location = row["location"].as<std::string>();
+            server.class_type = row["class"].as<std::string>();
+            servers.push_back(server);
+        }
+        
+        txn.commit();
+    } catch (const std::exception& e) {
+        std::cerr << "Ошибка при получении списка серверов: " << e.what() << std::endl;
+    }
+    
+    return servers;
+}
+
 

@@ -193,6 +193,97 @@ HttpRequest parse_http_request(const char* buffer, size_t length) {
     return req;
 }
 
+// Список спектров для холодного хранилища
+const char* COLD_STORAGE_SPECTRUMS[] = {
+    "B01",  // Coastal/Aerosol
+    "B09",  // Water Vapor
+    "B10",  // Cirrus
+    "B12",  // SWIR-2
+    "B05",  // Red-Edge 1
+    "B06",  // Red-Edge 2
+    "B07",  // Red-Edge 3
+    "B8A"   // Red-Edge 4
+};
+const int COLD_STORAGE_SPECTRUMS_COUNT = sizeof(COLD_STORAGE_SPECTRUMS) / sizeof(COLD_STORAGE_SPECTRUMS[0]);
+
+storage_type_t determine_storage_type(const char* spectrum) {
+    // Проверяем, входит ли спектр в список для холодного хранилища
+    for (int i = 0; i < COLD_STORAGE_SPECTRUMS_COUNT; i++) {
+        if (strcmp(spectrum, COLD_STORAGE_SPECTRUMS[i]) == 0) {
+            return COLD_STORAGE;
+        }
+    }
+    return HOT_STORAGE;
+}
+
+std::vector<ServerInfo> get_servers_by_type(DBManager& db_manager, const std::string& storage_type) {
+    // Получаем список серверов из базы данных
+    return db_manager.get_servers_by_type(storage_type);
+}
+
+ServerInfo select_optimal_server(const std::vector<ServerInfo>& servers, size_t data_size) {
+    ServerInfo best_server;
+    double best_score = -1;
+    
+    for (const auto& server : servers) {
+        // Вычисляем свободное место на SSD и HDD
+        double free_ssd = server.ssd_volume * (100 - server.ssd_fullness) / 100.0;
+        double free_hdd = server.hdd_volume * (100 - server.hdd_fullness) / 100.0;
+        
+        // Вычисляем общий показатель свободного места
+        double score = free_ssd + free_hdd;
+        
+        if (score > best_score) {
+            best_score = score;
+            best_server = server;
+        }
+    }
+    
+    return best_server;
+}
+
+int send_data_to_server(const ServerInfo& server, const char* data, size_t data_size) {
+    // Формируем URL сервера
+    std::string server_url = "http://" + server.location + ":8080/upload";
+    
+    // Отправляем данные на сервер
+    std::string response = send_request_to_storage("POST", "/upload", std::string(data, data_size));
+    
+    // Проверяем ответ
+    if (response.find("200 OK") != std::string::npos) {
+        return 0;
+    }
+    return -1;
+}
+
+int distribute_to_storage(storage_type_t storage_type, const char* data, size_t data_size) {
+    // Определяем тип хранилища в строковом формате
+    std::string storage_type_str = (storage_type == HOT_STORAGE) ? "hot" : "cold";
+    
+    // Создаем экземпляр DBManager
+    DBManager db_manager;
+    
+    // Получаем список серверов нужного типа
+    std::vector<ServerInfo> servers = get_servers_by_type(db_manager, storage_type_str);
+    
+    if (servers.empty()) {
+        printf("Ошибка: не найдены серверы типа %s\n", storage_type_str.c_str());
+        return -1;
+    }
+    
+    // Выбираем оптимальный сервер
+    ServerInfo selected_server = select_optimal_server(servers, data_size);
+    
+    printf("Выбран сервер %d (тип: %s, свободное место: SSD %.1f%%, HDD %.1f%%)\n",
+           selected_server.server_id,
+           selected_server.class_type.c_str(),
+           100.0 - selected_server.ssd_fullness,
+           100.0 - selected_server.hdd_fullness);
+    
+    // Отправляем данные на выбранный сервер
+    return send_data_to_server(selected_server, data, data_size);
+}
+
 // Функция для отправки HTTP-запроса к storage_server
 std::string send_request_to_storage(const std::string& method, const std::string& path, 
                                   const std::string& body = "", 
@@ -249,8 +340,43 @@ std::string send_request_to_storage(const std::string& method, const std::string
     return response;
 }
 
-// Обработка HTTP-запроса
+// Обновляем функцию process_http_request для обработки загрузки файлов
 std::string process_http_request(const HttpRequest& req, DBManager& db_manager) {
+    if (req.method == "POST" && req.path == "/upload") {
+        // Получаем спектр из заголовков
+        const char* spectrum = nullptr;
+        for (const auto& header : req.headers) {
+            if (header.first == "X-Spectrum") {
+                spectrum = header.second.c_str();
+                break;
+            }
+        }
+
+        if (!spectrum) {
+            return "HTTP/1.1 400 Bad Request\r\n"
+                   "Content-Type: application/json\r\n"
+                   "Content-Length: 45\r\n\r\n"
+                   "{\"error\": \"Spectrum header is required\"}";
+        }
+
+        // Определяем тип хранилища
+        storage_type_t storage_type = determine_storage_type(spectrum);
+
+        // Распределяем данные
+        if (distribute_to_storage(storage_type, req.body.c_str(), req.body.length()) != 0) {
+            return "HTTP/1.1 500 Internal Server Error\r\n"
+                   "Content-Type: application/json\r\n"
+                   "Content-Length: 35\r\n\r\n"
+                   "{\"error\": \"Storage distribution failed\"}";
+        }
+
+        // Возвращаем успешный ответ
+        return "HTTP/1.1 200 OK\r\n"
+               "Content-Type: application/json\r\n"
+               "Content-Length: 35\r\n\r\n"
+               "{\"message\": \"File uploaded successfully\"}";
+    }
+
     std::string response;
     
     // Обработка запросов для работы с изображениями

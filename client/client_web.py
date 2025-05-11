@@ -18,6 +18,8 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 from client import Client
 import aiohttp
+from metadata_extractor import process_input
+import tempfile
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -83,22 +85,64 @@ def get_index():
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
-    """Обработка загруженного файла"""
+    """Обработка загруженного файла, папки или архива"""
     try:
-        # Создаем уникальное имя файла
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{timestamp}_{file.filename}"
-        file_path = os.path.join(UPLOAD_FOLDER, filename)
-        
-        # Сохраняем файл
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        
-        # Обрабатываем архив
-        client = Client()
-        await process_safe_archive(file_path, client)
-        
-        return {"message": "File uploaded and processed successfully", "filename": filename}
+        # Создаем временную директорию для обработки
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            
+            # Сохраняем загруженный файл
+            file_path = temp_path / file.filename
+            with open(file_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+            
+            # Обрабатываем входные данные
+            metadata_list = process_input(str(file_path))
+            
+            if not metadata_list:
+                return {"error": "Не удалось извлечь метаданные из загруженных данных"}
+            
+            # Создаем клиент для отправки запросов
+            client = Client()
+            
+            # Отправляем каждый файл с его метаданными
+            results = []
+            for metadata in metadata_list:
+                try:
+                    # Формируем путь к файлу
+                    if file_path.suffix.lower() in ['.zip', '.tar', '.gz']:
+                        # Для архива используем временную директорию
+                        file_to_upload = temp_path / metadata['filename']
+                    else:
+                        file_to_upload = file_path
+                    
+                    # Отправляем файл с информацией о спектре
+                    headers = {"X-Spectrum": metadata['band']}
+                    result = await client.upload_image(str(file_to_upload), metadata, headers)
+                    if result:
+                        results.append({
+                            "filename": metadata['filename'],
+                            "status": "success",
+                            "metadata": metadata
+                        })
+                    else:
+                        results.append({
+                            "filename": metadata['filename'],
+                            "status": "error",
+                            "error": "Failed to upload file"
+                        })
+                except Exception as e:
+                    results.append({
+                        "filename": metadata['filename'],
+                        "status": "error",
+                        "error": str(e)
+                    })
+            
+            return {
+                "message": "Files processed",
+                "results": results
+            }
+            
     except Exception as e:
         logger.error(f"Ошибка при обработке файла: {str(e)}")
         return {"error": str(e)}

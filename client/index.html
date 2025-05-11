@@ -202,6 +202,44 @@
         .spectrum-checkbox {
             margin: 5px 0;
         }
+        .file-input-container {
+            margin-bottom: 20px;
+        }
+        .file-input-info {
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+        }
+        .file-input-info ul {
+            margin: 5px 0;
+            padding-left: 20px;
+        }
+        .upload-results {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+        }
+        .result-item {
+            margin-bottom: 10px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .result-item.success {
+            background-color: #d4edda;
+            border-color: #c3e6cb;
+        }
+        .result-item.error {
+            background-color: #f8d7da;
+            border-color: #f5c6cb;
+        }
+        .metadata-info {
+            margin-top: 5px;
+            font-size: 0.9em;
+            color: #666;
+        }
     </style>
 </head>
 <body>
@@ -349,12 +387,26 @@
 
     <div id="upload" class="tab-content">
         <div class="upload-container">
-            <h2>Загрузка архивов со снимками</h2>
+            <h2>Загрузка снимков</h2>
             <form class="upload-form" id="uploadForm">
-                <input type="file" class="file-input" id="fileInput" accept=".zip,.tar,.gz" required>
+                <div class="file-input-container">
+                    <input type="file" class="file-input" id="fileInput" accept=".zip,.tar,.gz,.tif,.jp2,.img" required>
+                    <div class="file-input-info">
+                        <p>Поддерживаемые форматы:</p>
+                        <ul>
+                            <li>Отдельные файлы (.tif, .jp2, .img)</li>
+                            <li>Архивы (.zip, .tar, .gz)</li>
+                            <li>Папки с файлами</li>
+                        </ul>
+                    </div>
+                </div>
                 <button type="submit" class="upload-button">Загрузить</button>
             </form>
             <div id="uploadStatus" class="upload-status" style="display: none;"></div>
+            <div id="uploadResults" class="upload-results" style="display: none;">
+                <h3>Результаты обработки:</h3>
+                <div id="resultsList"></div>
+            </div>
         </div>
     </div>
 
@@ -477,11 +529,13 @@
             }
         }
 
-        // Обработка загрузки файлов
+        // Обновляем обработчик загрузки файлов
         document.getElementById('uploadForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const fileInput = document.getElementById('fileInput');
             const uploadStatus = document.getElementById('uploadStatus');
+            const uploadResults = document.getElementById('uploadResults');
+            const resultsList = document.getElementById('resultsList');
             
             if (!fileInput.files[0]) {
                 showUploadStatus('Пожалуйста, выберите файл', 'error');
@@ -492,17 +546,47 @@
             formData.append('file', fileInput.files[0]);
 
             try {
+                showUploadStatus('Загрузка и обработка файла...', 'info');
+                uploadResults.style.display = 'none';
+                resultsList.innerHTML = '';
+
                 const response = await fetch('/upload', {
                     method: 'POST',
                     body: formData
                 });
 
+                const data = await response.json();
+
                 if (response.ok) {
-                    showUploadStatus('Файл успешно загружен и отправлен на обработку', 'success');
+                    showUploadStatus('Файлы успешно обработаны', 'success');
+                    
+                    // Отображаем результаты
+                    uploadResults.style.display = 'block';
+                    data.results.forEach(result => {
+                        const resultItem = document.createElement('div');
+                        resultItem.className = `result-item ${result.status}`;
+                        
+                        let content = `<strong>${result.filename}</strong>: ${result.status}`;
+                        
+                        if (result.status === 'success') {
+                            content += `<div class="metadata-info">
+                                <p>Источник: ${result.metadata.source}</p>
+                                <p>Канал: ${result.metadata.band}</p>
+                                <p>Время: ${result.metadata.timestamp}</p>
+                            </div>`;
+                        } else {
+                            content += `<div class="metadata-info">
+                                <p>Ошибка: ${result.error}</p>
+                            </div>`;
+                        }
+                        
+                        resultItem.innerHTML = content;
+                        resultsList.appendChild(resultItem);
+                    });
+                    
                     fileInput.value = '';
                 } else {
-                    const error = await response.json();
-                    showUploadStatus(`Ошибка: ${error.detail}`, 'error');
+                    showUploadStatus(`Ошибка: ${data.error}`, 'error');
                 }
             } catch (error) {
                 showUploadStatus('Ошибка при загрузке файла', 'error');
