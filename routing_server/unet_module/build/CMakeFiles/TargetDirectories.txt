@@ -1,0 +1,3 @@
+/Users/elizavetaomelcenko/diploma2/routing_server/unet_module/build/CMakeFiles/test_unet.dir
+/Users/elizavetaomelcenko/diploma2/routing_server/unet_module/build/CMakeFiles/edit_cache.dir
+/Users/elizavetaomelcenko/diploma2/routing_server/unet_module/build/CMakeFiles/rebuild_cache.dir

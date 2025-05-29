@@ -94,6 +94,12 @@ int routing_server_run(const routing_server_options &opts) {
         return -1;
     }
 
+    // Отправляем информацию о создании сервера
+    nlohmann::json server_info;
+    server_info["adress"] = inet_ntoa(master_addr.sin_addr);
+    server_info["priority"] = 1; // Приоритет по умолчанию
+    gossip_broadcast("POST", "/router/add", server_info.dump());
+
     int epl = epoll_create1(0);
     epoll_event ev;
     ev.data.fd = master_fd;
@@ -141,6 +147,11 @@ int routing_server_run(const routing_server_options &opts) {
     }
 
     printf("Info: Release resources\n");
+    
+    // Отправляем информацию об удалении сервера
+    std::string server_address = inet_ntoa(master_addr.sin_addr);
+    gossip_broadcast("DELETE", "/router/remove/" + server_address);
+
     for (const auto &wrk : workers) {
         pthread_join(wrk, nullptr);
     }
@@ -340,8 +351,42 @@ std::string send_request_to_storage(const std::string& method, const std::string
     return response;
 }
 
-// Обновляем функцию process_http_request для обработки загрузки файлов
 std::string process_http_request(const HttpRequest& req, DBManager& db_manager) {
+    if (req.method == "POST" && req.path == "/router/add") {
+        nlohmann::json data = nlohmann::json::parse(req.body);
+        RoutingServerInsert rs;
+        rs.adress = data["adress"];
+        rs.priority = data["priority"];
+        db_manager.insert_routing_server(rs);
+        gossip_broadcast("POST", "/router/add", req.body);
+        return "HTTP/1.1 201 Created\r\nContent-Length: 0\r\n\r\n";
+    }
+    if (req.method == "DELETE" && req.path.find("/router/remove/") == 0) {
+        int id = std::stoi(req.path.substr(strlen("/router/remove/")));
+        db_manager.delete_routing_server(id);
+        gossip_broadcast("DELETE", req.path);
+        return "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+    }
+    if (req.method == "POST" && req.path == "/server/add") {
+        nlohmann::json data = nlohmann::json::parse(req.body);
+        ServerInsert s;
+        s.ssd_fullness = data["ssd_fullness"];
+        s.ssd_volume = data["ssd_volume"];
+        s.hdd_volume = data["hdd_volume"];
+        s.hdd_fullness = data["hdd_fullness"];
+        s.location = data["location"];
+        s.class_type = data["class"];
+        db_manager.insert_server(s);
+        gossip_broadcast("POST", "/server/add", req.body);
+        return "HTTP/1.1 201 Created\r\nContent-Length: 0\r\n\r\n";
+    }
+    if (req.method == "DELETE" && req.path.find("/server/remove/") == 0) {
+        int id = std::stoi(req.path.substr(strlen("/server/remove/")));
+        db_manager.delete_server(id);
+        gossip_broadcast("DELETE", req.path);
+        return "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+    }
+
     if (req.method == "POST" && req.path == "/upload") {
         // Получаем спектр из заголовков
         const char* spectrum = nullptr;
@@ -545,3 +590,4 @@ int send_response(int socket_fd, const std::string &response) {
         return -1;
     }
     return 0; 
+}

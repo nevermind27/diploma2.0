@@ -53,6 +53,20 @@
         "memory_resource": "cpp",
         "tuple": "cpp",
         "type_traits": "cpp",
-        "utility": "cpp"
+        "utility": "cpp",
+        "__tree": "cpp",
+        "forward_list": "cpp",
+        "map": "cpp",
+        "regex": "cpp",
+        "span": "cpp",
+        "valarray": "cpp",
+        "hash_map": "cpp",
+        "list": "cpp",
+        "set": "cpp",
+        "unordered_set": "cpp",
+        "*.ipp": "cpp",
+        "format": "cpp",
+        "ranges": "cpp",
+        "text_encoding": "cpp"
     }
 }

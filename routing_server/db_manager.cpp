@@ -270,4 +270,109 @@ std::vector<ServerInfo> DBManager::get_servers_by_type(const std::string& storag
     return servers;
 }
 
+// Добавление нового маршрутизатора
+// SQL: INSERT INTO RoutingServers (adress, priority) VALUES ('адрес', приоритет) RETURNING router_id;
+int DBManager::insert_routing_server(const RoutingServerInsert& data) {
+    if (!conn) {
+        logger.error("Нет соединения с базой данных");
+        return -1;
+    }
+    
+    std::stringstream query;
+    query << "INSERT INTO RoutingServers (adress, priority) "
+          << "VALUES ('" << data.adress << "', " << data.priority << ") "
+          << "RETURNING router_id;";
+    
+    PGresult* res = PQexec(conn, query.str().c_str());
+    
+    if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+        logger.error("Ошибка выполнения запроса: " + std::string(PQerrorMessage(conn)));
+        PQclear(res);
+        return -1;
+    }
+    
+    int router_id = std::stoi(PQgetvalue(res, 0, 0));
+    PQclear(res);
+    return router_id;
+}
+
+// Удаление маршрутизатора по ID
+// SQL: DELETE FROM RoutingServers WHERE router_id = id;
+bool DBManager::delete_routing_server(int id) {
+    if (!conn) {
+        logger.error("Нет соединения с базой данных");
+        return false;
+    }
+    
+    std::stringstream query;
+    query << "DELETE FROM RoutingServers WHERE router_id = " << id << ";";
+    
+    PGresult* res = PQexec(conn, query.str().c_str());
+    
+    if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+        logger.error("Ошибка выполнения запроса: " + std::string(PQerrorMessage(conn)));
+        PQclear(res);
+        return false;
+    }
+    
+    PQclear(res);
+    return true;
+}
+
+// Добавление нового сервера
+// SQL: INSERT INTO Servers (ssd_fullness, ssd_volume, hdd_volume, hdd_fullness, location, class)
+//      VALUES (ssd_fullness, ssd_volume, hdd_volume, hdd_fullness, 'location', 'class')
+//      RETURNING server_id;
+int DBManager::insert_server(const ServerInsert& data) {
+    if (!conn) {
+        logger.error("Нет соединения с базой данных");
+        return -1;
+    }
+    
+    std::stringstream query;
+    query << "INSERT INTO Servers (ssd_fullness, ssd_volume, hdd_volume, hdd_fullness, location, class) "
+          << "VALUES (" << data.ssd_fullness << ", " 
+          << data.ssd_volume << ", "
+          << data.hdd_volume << ", "
+          << data.hdd_fullness << ", '"
+          << data.location << "', '"
+          << data.class_type << "') "
+          << "RETURNING server_id;";
+    
+    PGresult* res = PQexec(conn, query.str().c_str());
+    
+    if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+        logger.error("Ошибка выполнения запроса: " + std::string(PQerrorMessage(conn)));
+        PQclear(res);
+        return -1;
+    }
+    
+    int server_id = std::stoi(PQgetvalue(res, 0, 0));
+    PQclear(res);
+    return server_id;
+}
+
+// Удаление сервера по ID
+// SQL: DELETE FROM Servers WHERE server_id = id;
+bool DBManager::delete_server(int id) {
+    if (!conn) {
+        logger.error("Нет соединения с базой данных");
+        return false;
+    }
+    
+    std::stringstream query;
+    query << "DELETE FROM Servers WHERE server_id = " << id << ";";
+    
+    PGresult* res = PQexec(conn, query.str().c_str());
+    
+    if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+        logger.error("Ошибка выполнения запроса: " + std::string(PQerrorMessage(conn)));
+        PQclear(res);
+        return false;
+    }
+    
+    PQclear(res);
+    return true;
+}
+
 
