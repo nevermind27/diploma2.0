@@ -1,7 +1,4 @@
-// Поиск изображений по координатам
-// SQL: SELECT filename, timestamp, source, north_lat, south_lat, east_lon, west_lon
-//      FROM Images WHERE (north_lat BETWEEN south AND north OR south_lat BETWEEN south AND north)
-//      AND (east_lon BETWEEN west AND east OR west_lon BETWEEN west AND east);
+// Поиск изображений по координатам с использованием geohash
 std::vector<ImageInfo> DBManager::search_images(float north, float south, float east, float west) {
     std::vector<ImageInfo> results;
     
@@ -15,8 +12,16 @@ std::vector<ImageInfo> DBManager::search_images(float north, float south, float 
         return results;
     }
     
-    std::string query = form_search_query(north, south, east, west);
-    PGresult* res = PQexec(conn, query.c_str());
+    // Получаем список префиксов geohash для заданной области
+    std::vector<std::string> geohash_prefixes = get_geohash_prefixes(north, south, east, west);
+    
+    std::string query = "SELECT image_id, filename, timestamp, source, geohash "
+                       "FROM Images WHERE geohash LIKE ANY ("
+                       "SELECT prefix || '%' FROM UNNEST($1::text[]) AS prefix) "
+                       "ORDER BY timestamp DESC;";
+    
+    PGresult* res = PQexecParams(conn, query.c_str(), 1, NULL, 
+                                &geohash_prefixes[0], NULL, NULL, 0);
     
     if (PQresultStatus(res) != PGRES_TUPLES_OK) {
         logger.error("Ошибка выполнения запроса: " + std::string(PQerrorMessage(conn)));
@@ -27,13 +32,11 @@ std::vector<ImageInfo> DBManager::search_images(float north, float south, float 
     int rows = PQntuples(res);
     for (int i = 0; i < rows; i++) {
         ImageInfo info;
-        info.filename = PQgetvalue(res, i, 0);
-        info.timestamp = PQgetvalue(res, i, 1);
-        info.source = PQgetvalue(res, i, 2);
-        info.north_lat = std::stof(PQgetvalue(res, i, 3));
-        info.south_lat = std::stof(PQgetvalue(res, i, 4));
-        info.east_lon = std::stof(PQgetvalue(res, i, 5));
-        info.west_lon = std::stof(PQgetvalue(res, i, 6));
+        info.image_id = std::stoi(PQgetvalue(res, i, 0));
+        info.filename = PQgetvalue(res, i, 1);
+        info.timestamp = PQgetvalue(res, i, 2);
+        info.source = PQgetvalue(res, i, 3);
+        info.geohash = PQgetvalue(res, i, 4);
         results.push_back(info);
     }
     
@@ -49,17 +52,13 @@ std::string DBManager::form_insert_image_query(const ImageInsertData& data) {
     std::stringstream query;
     
     query << "INSERT INTO Images ("
-          << "filename, source, timestamp, "
-          << "north_lat, south_lat, east_lon, west_lon"
+          << "filename, source, timestamp, geohash"
           << ") VALUES ('"
           << data.filename << "', '"
           << data.source << "', '"
-          << data.timestamp << "', "
-          << data.north_lat << ", "
-          << data.south_lat << ", "
-          << data.east_lon << ", "
-          << data.west_lon
-          << ") RETURNING image_id;";
+          << data.timestamp << "', '"
+          << data.geohash
+          << "') RETURNING image_id;";
     
     return query.str();
 }
@@ -97,8 +96,7 @@ bool DBManager::validate_coordinates(float north, float south, float east, float
     return north > south && east > west;
 }
 
-// Поиск спектров по имени изображения
-// SQL: SELECT spectrum_name, frequency, bandwidth FROM Spectrums WHERE image_id = (SELECT image_id FROM Images WHERE filename = 'имя_изображения');
+// Получение спектров для изображения
 std::vector<SpectrumInfo> DBManager::get_spectrums_by_image(const std::string& image_name) {
     std::vector<SpectrumInfo> results;
     
@@ -107,11 +105,13 @@ std::vector<SpectrumInfo> DBManager::get_spectrums_by_image(const std::string& i
         return results;
     }
     
-    std::string query = "SELECT spectrum_name, frequency, bandwidth FROM Spectrums "
-                       "WHERE image_id = (SELECT image_id FROM Images WHERE filename = '" + 
-                       image_name + "');";
+    std::string query = "SELECT img_spectrum_id, spectrum_name, segment_storage, "
+                       "default_cold_color, frequency, other_data "
+                       "FROM Spectrums WHERE img_id = ("
+                       "SELECT image_id FROM Images WHERE filename = $1);";
     
-    PGresult* res = PQexec(conn, query.c_str());
+    const char* paramValues[1] = {image_name.c_str()};
+    PGresult* res = PQexecParams(conn, query.c_str(), 1, NULL, paramValues, NULL, NULL, 0);
     
     if (PQresultStatus(res) != PGRES_TUPLES_OK) {
         logger.error("Ошибка выполнения запроса: " + std::string(PQerrorMessage(conn)));
@@ -122,9 +122,12 @@ std::vector<SpectrumInfo> DBManager::get_spectrums_by_image(const std::string& i
     int rows = PQntuples(res);
     for (int i = 0; i < rows; i++) {
         SpectrumInfo info;
-        info.spectrum_name = PQgetvalue(res, i, 0);
-        info.frequency = std::stof(PQgetvalue(res, i, 1));
-        info.bandwidth = std::stof(PQgetvalue(res, i, 2));
+        info.spectrum_id = std::stoi(PQgetvalue(res, i, 0));
+        info.spectrum_name = PQgetvalue(res, i, 1);
+        info.segment_storage = std::stoi(PQgetvalue(res, i, 2));
+        info.default_cold_color = PQgetvalue(res, i, 3);
+        info.frequency = std::stoi(PQgetvalue(res, i, 4));
+        info.other_data = PQgetvalue(res, i, 5);
         results.push_back(info);
     }
     
@@ -132,9 +135,34 @@ std::vector<SpectrumInfo> DBManager::get_spectrums_by_image(const std::string& i
     return results;
 }
 
+// Обновление частоты обращения к спектру
+bool DBManager::increment_spectrum_frequency(const std::string& image_name, const std::string& spectrum_name) {
+    if (!conn) {
+        logger.error("Нет соединения с базой данных");
+        return false;
+    }
+    
+    std::string query = "WITH updated_spectrums AS ("
+                       "UPDATE Spectrums SET frequency = frequency + 1 "
+                       "WHERE img_id = (SELECT image_id FROM Images WHERE filename = $1) "
+                       "AND spectrum_name = $2 "
+                       "RETURNING img_spectrum_id, segment_storage, default_cold_color, frequency) "
+                       "SELECT * FROM updated_spectrums;";
+    
+    const char* paramValues[2] = {image_name.c_str(), spectrum_name.c_str()};
+    PGresult* res = PQexecParams(conn, query.c_str(), 2, NULL, paramValues, NULL, NULL, 0);
+    
+    if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+        logger.error("Ошибка выполнения запроса: " + std::string(PQerrorMessage(conn)));
+        PQclear(res);
+        return false;
+    }
+    
+    PQclear(res);
+    return true;
+}
+
 // Поиск изображений по частичному совпадению имени
-// SQL: SELECT filename, timestamp, source, north_lat, south_lat, east_lon, west_lon 
-//      FROM Images WHERE filename LIKE '%часть_имени%';
 std::vector<ImageInfo> DBManager::search_images_by_name(const std::string& partial_name) {
     std::vector<ImageInfo> results;
     
@@ -143,10 +171,12 @@ std::vector<ImageInfo> DBManager::search_images_by_name(const std::string& parti
         return results;
     }
     
-    std::string query = "SELECT filename, timestamp, source, north_lat, south_lat, east_lon, west_lon "
-                       "FROM Images WHERE filename LIKE '%" + partial_name + "%';";
+    std::string query = "SELECT image_id, filename, timestamp, source, geohash "
+                       "FROM Images WHERE filename ILIKE '%' || $1 || '%' "
+                       "ORDER BY timestamp DESC;";
     
-    PGresult* res = PQexec(conn, query.c_str());
+    const char* paramValues[1] = {partial_name.c_str()};
+    PGresult* res = PQexecParams(conn, query.c_str(), 1, NULL, paramValues, NULL, NULL, 0);
     
     if (PQresultStatus(res) != PGRES_TUPLES_OK) {
         logger.error("Ошибка выполнения запроса: " + std::string(PQerrorMessage(conn)));
@@ -157,13 +187,11 @@ std::vector<ImageInfo> DBManager::search_images_by_name(const std::string& parti
     int rows = PQntuples(res);
     for (int i = 0; i < rows; i++) {
         ImageInfo info;
-        info.filename = PQgetvalue(res, i, 0);
-        info.timestamp = PQgetvalue(res, i, 1);
-        info.source = PQgetvalue(res, i, 2);
-        info.north_lat = std::stof(PQgetvalue(res, i, 3));
-        info.south_lat = std::stof(PQgetvalue(res, i, 4));
-        info.east_lon = std::stof(PQgetvalue(res, i, 5));
-        info.west_lon = std::stof(PQgetvalue(res, i, 6));
+        info.image_id = std::stoi(PQgetvalue(res, i, 0));
+        info.filename = PQgetvalue(res, i, 1);
+        info.timestamp = PQgetvalue(res, i, 2);
+        info.source = PQgetvalue(res, i, 3);
+        info.geohash = PQgetvalue(res, i, 4);
         results.push_back(info);
     }
     
@@ -172,7 +200,6 @@ std::vector<ImageInfo> DBManager::search_images_by_name(const std::string& parti
 }
 
 // Получение списка всех доступных изображений
-// SQL: SELECT filename, timestamp, source, north_lat, south_lat, east_lon, west_lon FROM Images;
 std::vector<ImageInfo> DBManager::get_all_images() {
     std::vector<ImageInfo> results;
     
@@ -181,8 +208,8 @@ std::vector<ImageInfo> DBManager::get_all_images() {
         return results;
     }
     
-    std::string query = "SELECT filename, timestamp, source, north_lat, south_lat, east_lon, west_lon "
-                       "FROM Images;";
+    std::string query = "SELECT image_id, filename, timestamp, source, geohash "
+                       "FROM Images ORDER BY timestamp DESC;";
     
     PGresult* res = PQexec(conn, query.c_str());
     
@@ -195,13 +222,11 @@ std::vector<ImageInfo> DBManager::get_all_images() {
     int rows = PQntuples(res);
     for (int i = 0; i < rows; i++) {
         ImageInfo info;
-        info.filename = PQgetvalue(res, i, 0);
-        info.timestamp = PQgetvalue(res, i, 1);
-        info.source = PQgetvalue(res, i, 2);
-        info.north_lat = std::stof(PQgetvalue(res, i, 3));
-        info.south_lat = std::stof(PQgetvalue(res, i, 4));
-        info.east_lon = std::stof(PQgetvalue(res, i, 5));
-        info.west_lon = std::stof(PQgetvalue(res, i, 6));
+        info.image_id = std::stoi(PQgetvalue(res, i, 0));
+        info.filename = PQgetvalue(res, i, 1);
+        info.timestamp = PQgetvalue(res, i, 2);
+        info.source = PQgetvalue(res, i, 3);
+        info.geohash = PQgetvalue(res, i, 4);
         results.push_back(info);
     }
     
@@ -240,106 +265,67 @@ int DBManager::insert_spectrum(int image_id, const SpectrumInsertData& data) {
     return spectrum_id;
 }
 
+// Получение списка серверов по типу хранилища
 std::vector<ServerInfo> DBManager::get_servers_by_type(const std::string& storage_type) {
     std::vector<ServerInfo> servers;
     
-    try {
-        std::string query = "SELECT server_id, ssd_fullness, ssd_volume, hdd_volume, hdd_fullness, location, class "
-                           "FROM Servers WHERE class = '" + storage_type + "'";
-        
-        pqxx::work txn(*conn);
-        pqxx::result result = txn.exec(query);
-        
-        for (const auto& row : result) {
-            ServerInfo server;
-            server.server_id = row["server_id"].as<int>();
-            server.ssd_fullness = row["ssd_fullness"].as<int>();
-            server.ssd_volume = row["ssd_volume"].as<int>();
-            server.hdd_volume = row["hdd_volume"].as<int>();
-            server.hdd_fullness = row["hdd_fullness"].as<int>();
-            server.location = row["location"].as<std::string>();
-            server.class_type = row["class"].as<std::string>();
-            servers.push_back(server);
-        }
-        
-        txn.commit();
-    } catch (const std::exception& e) {
-        std::cerr << "Ошибка при получении списка серверов: " << e.what() << std::endl;
-    }
-    
-    return servers;
-}
-
-// Добавление нового маршрутизатора
-// SQL: INSERT INTO RoutingServers (adress, priority) VALUES ('адрес', приоритет) RETURNING router_id;
-int DBManager::insert_routing_server(const RoutingServerInsert& data) {
     if (!conn) {
         logger.error("Нет соединения с базой данных");
-        return -1;
+        return servers;
     }
     
-    std::stringstream query;
-    query << "INSERT INTO RoutingServers (adress, priority) "
-          << "VALUES ('" << data.adress << "', " << data.priority << ") "
-          << "RETURNING router_id;";
+    std::string query = "SELECT server_id, ssd_fullness, ssd_volume, hdd_volume, "
+                       "hdd_fullness, location, class "
+                       "FROM Servers WHERE class = $1;";
     
-    PGresult* res = PQexec(conn, query.str().c_str());
+    const char* paramValues[1] = {storage_type.c_str()};
+    PGresult* res = PQexecParams(conn, query.c_str(), 1, NULL, paramValues, NULL, NULL, 0);
     
     if (PQresultStatus(res) != PGRES_TUPLES_OK) {
         logger.error("Ошибка выполнения запроса: " + std::string(PQerrorMessage(conn)));
         PQclear(res);
-        return -1;
+        return servers;
     }
     
-    int router_id = std::stoi(PQgetvalue(res, 0, 0));
-    PQclear(res);
-    return router_id;
-}
-
-// Удаление маршрутизатора по ID
-// SQL: DELETE FROM RoutingServers WHERE router_id = id;
-bool DBManager::delete_routing_server(int id) {
-    if (!conn) {
-        logger.error("Нет соединения с базой данных");
-        return false;
-    }
-    
-    std::stringstream query;
-    query << "DELETE FROM RoutingServers WHERE router_id = " << id << ";";
-    
-    PGresult* res = PQexec(conn, query.str().c_str());
-    
-    if (PQresultStatus(res) != PGRES_COMMAND_OK) {
-        logger.error("Ошибка выполнения запроса: " + std::string(PQerrorMessage(conn)));
-        PQclear(res);
-        return false;
+    int rows = PQntuples(res);
+    for (int i = 0; i < rows; i++) {
+        ServerInfo server;
+        server.server_id = std::stoi(PQgetvalue(res, i, 0));
+        server.ssd_fullness = std::stoi(PQgetvalue(res, i, 1));
+        server.ssd_volume = std::stoi(PQgetvalue(res, i, 2));
+        server.hdd_volume = std::stoi(PQgetvalue(res, i, 3));
+        server.hdd_fullness = std::stoi(PQgetvalue(res, i, 4));
+        server.location = PQgetvalue(res, i, 5);
+        server.class_type = PQgetvalue(res, i, 6);
+        servers.push_back(server);
     }
     
     PQclear(res);
-    return true;
+    return servers;
 }
 
 // Добавление нового сервера
-// SQL: INSERT INTO Servers (ssd_fullness, ssd_volume, hdd_volume, hdd_fullness, location, class)
-//      VALUES (ssd_fullness, ssd_volume, hdd_volume, hdd_fullness, 'location', 'class')
-//      RETURNING server_id;
 int DBManager::insert_server(const ServerInsert& data) {
     if (!conn) {
         logger.error("Нет соединения с базой данных");
         return -1;
     }
     
-    std::stringstream query;
-    query << "INSERT INTO Servers (ssd_fullness, ssd_volume, hdd_volume, hdd_fullness, location, class) "
-          << "VALUES (" << data.ssd_fullness << ", " 
-          << data.ssd_volume << ", "
-          << data.hdd_volume << ", "
-          << data.hdd_fullness << ", '"
-          << data.location << "', '"
-          << data.class_type << "') "
-          << "RETURNING server_id;";
+    std::string query = "INSERT INTO Servers (ssd_fullness, ssd_volume, hdd_volume, "
+                       "hdd_fullness, location, class) "
+                       "VALUES ($1, $2, $3, $4, $5, $6) "
+                       "RETURNING server_id;";
     
-    PGresult* res = PQexec(conn, query.str().c_str());
+    const char* paramValues[6] = {
+        std::to_string(data.ssd_fullness).c_str(),
+        std::to_string(data.ssd_volume).c_str(),
+        std::to_string(data.hdd_volume).c_str(),
+        std::to_string(data.hdd_fullness).c_str(),
+        data.location.c_str(),
+        data.class_type.c_str()
+    };
+    
+    PGresult* res = PQexecParams(conn, query.c_str(), 6, NULL, paramValues, NULL, NULL, 0);
     
     if (PQresultStatus(res) != PGRES_TUPLES_OK) {
         logger.error("Ошибка выполнения запроса: " + std::string(PQerrorMessage(conn)));
@@ -352,16 +338,121 @@ int DBManager::insert_server(const ServerInsert& data) {
     return server_id;
 }
 
-// Удаление сервера по ID
-// SQL: DELETE FROM Servers WHERE server_id = id;
+// Добавление нового маршрутизатора
+int DBManager::insert_routing_server(const RoutingServerInsert& data) {
+    if (!conn) {
+        logger.error("Нет соединения с базой данных");
+        return -1;
+    }
+    
+    std::string query = "INSERT INTO Routing_Servers (server_id, adress, priority, geohash_prefix) "
+                       "VALUES ($1, $2, $3, $4) "
+                       "RETURNING server_id;";
+    
+    const char* paramValues[4] = {
+        std::to_string(data.server_id).c_str(),
+        data.adress.c_str(),
+        std::to_string(data.priority).c_str(),
+        data.geohash_prefix.c_str()
+    };
+    
+    PGresult* res = PQexecParams(conn, query.c_str(), 4, NULL, paramValues, NULL, NULL, 0);
+    
+    if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+        logger.error("Ошибка выполнения запроса: " + std::string(PQerrorMessage(conn)));
+        PQclear(res);
+        return -1;
+    }
+    
+    int router_id = std::stoi(PQgetvalue(res, 0, 0));
+    PQclear(res);
+    return router_id;
+}
+
+// Удаление сервера
 bool DBManager::delete_server(int id) {
     if (!conn) {
         logger.error("Нет соединения с базой данных");
         return false;
     }
     
+    std::string query = "DELETE FROM Servers WHERE server_id = $1;";
+    const char* paramValues[1] = {std::to_string(id).c_str()};
+    
+    PGresult* res = PQexecParams(conn, query.c_str(), 1, NULL, paramValues, NULL, NULL, 0);
+    
+    if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+        logger.error("Ошибка выполнения запроса: " + std::string(PQerrorMessage(conn)));
+        PQclear(res);
+        return false;
+    }
+    
+    PQclear(res);
+    return true;
+}
+
+// Удаление маршрутизатора
+bool DBManager::delete_routing_server(int id) {
+    if (!conn) {
+        logger.error("Нет соединения с базой данных");
+        return false;
+    }
+    
+    std::string query = "DELETE FROM Routing_Servers WHERE server_id = $1;";
+    const char* paramValues[1] = {std::to_string(id).c_str()};
+    
+    PGresult* res = PQexecParams(conn, query.c_str(), 1, NULL, paramValues, NULL, NULL, 0);
+    
+    if (PQresultStatus(res) != PGRES_COMMAND_OK) {
+        logger.error("Ошибка выполнения запроса: " + std::string(PQerrorMessage(conn)));
+        PQclear(res);
+        return false;
+    }
+    
+    PQclear(res);
+    return true;
+}
+
+// Добавление нового тайла
+int DBManager::insert_tile(const TileInsertData& data) {
+    if (!conn) {
+        logger.error("Нет соединения с базой данных");
+        return -1;
+    }
+    
     std::stringstream query;
-    query << "DELETE FROM Servers WHERE server_id = " << id << ";";
+    query << "INSERT INTO Tiles (tile_row, tile_column, spectrum, image_id, tile_url) "
+          << "VALUES (" << data.tile_row << ", " 
+          << data.tile_column << ", '"
+          << data.spectrum << "', "
+          << data.image_id << ", '"
+          << data.tile_url << "') "
+          << "RETURNING tile_id;";
+    
+    PGresult* res = PQexec(conn, query.str().c_str());
+    
+    if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+        logger.error("Ошибка выполнения запроса: " + std::string(PQerrorMessage(conn)));
+        PQclear(res);
+        return -1;
+    }
+    
+    int tile_id = std::stoi(PQgetvalue(res, 0, 0));
+    PQclear(res);
+    return tile_id;
+}
+
+// Обновление частоты обращения к тайлу
+bool DBManager::increment_tile_frequency(int tile_row, int tile_column) {
+    if (!conn) {
+        logger.error("Нет соединения с базой данных");
+        return false;
+    }
+    
+    std::stringstream query;
+    query << "UPDATE Tiles SET frequency = frequency + 1 "
+          << "WHERE tile_row = " << tile_row 
+          << " AND tile_column = " << tile_column << ";";
     
     PGresult* res = PQexec(conn, query.str().c_str());
     

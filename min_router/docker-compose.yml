@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  min_router:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./sentinel2_archive:/app/sentinel2_archive
+      - ./best_unet_resnet34.pth:/app/build/best_unet_resnet34.pth
+    depends_on:
+      - postgres
+    networks:
+      - router_network
+
+  postgres:
+    image: postgres:14
+    environment:
+      POSTGRES_DB: router_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    networks:
+      - router_network
+
+volumes:
+  postgres_data:
+
+networks:
+  router_network:
+    driver: bridge 
