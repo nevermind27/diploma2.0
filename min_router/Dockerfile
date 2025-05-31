@@ -17,6 +17,8 @@ RUN apt-get update && apt-get install -y \
     libcpprest-dev \
     python3 \
     python3-pip \
+    postgresql \
+    postgresql-contrib \
     && rm -rf /var/lib/apt/lists/*
 
 # Устанавливаем PyTorch
@@ -36,15 +38,27 @@ RUN mkdir build && cd build && \
 # Создаем директорию для архивов Sentinel-2
 RUN mkdir -p /app/sentinel2_archive
 
+# Настройка PostgreSQL
+RUN service postgresql start && \
+    su - postgres -c "psql -c \"CREATE DATABASE router_db;\" && \
+    psql -c \"ALTER USER postgres WITH PASSWORD 'postgres';\""
+
+# Создаем скрипт для запуска
+RUN echo '#!/bin/bash\n\
+service postgresql start\n\
+cd /app/build\n\
+./min_router\n\
+' > /app/start.sh && chmod +x /app/start.sh
+
 # Открываем порт для HTTP-запросов
 EXPOSE 8080
 
 # Настройка сети
-ENV POSTGRES_HOST=postgres
+ENV POSTGRES_HOST=localhost
 ENV POSTGRES_PORT=5432
 ENV POSTGRES_DB=router_db
 ENV POSTGRES_USER=postgres
 ENV POSTGRES_PASSWORD=postgres
 
 # Запускаем приложение
-CMD ["./build/min_router"] 
+CMD ["/app/start.sh"] 

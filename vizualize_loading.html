@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Infrastructure Simulation</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+    body { font-family: sans-serif; }
+    svg { background-color: #f5f5f5; border: 1px solid #ccc; }
+    .label { font-size: 12px; text-anchor: middle; }
+    .icon { width: 60px; height: 40px; }
+    .data-box { fill: orange; stroke: black; stroke-width: 1px; }
+    .packet { fill: #000; }
+    .fill-bar { stroke: #333; fill-opacity: 0.5; }
+    #controls { margin: 10px 0; }
+    button { margin-right: 10px; padding: 5px 10px; }
+  </style>
+</head>
+<body>
+  <h2>Routing & Gossip Protocol Simulation</h2>
+  <div id="controls">
+    <button onclick="resetSimulation()">🔁 Повторить</button>
+    <button onclick="pauseSimulation()">⏸️ Пауза</button>
+    <button onclick="resumeSimulation()">▶️ Продолжить</button>
+  </div>
+  <svg width="1400" height="600"></svg>
+  <script>
+    const svg = d3.select("svg");
+    let paused = false;
+    let pending = [];
+
+    const nodes = [
+      { id: "client", x: 100, y: 300, label: "Клиент", icon: "https://img.icons8.com/fluency/48/server.png" },
+      { id: "r1", x: 300, y: 200, label: "Маршрутизатор 1", icon: "https://img.icons8.com/fluency/48/router.png" },
+      { id: "r2", x: 320, y: 400, label: "Маршрутизатор 2", icon: "https://img.icons8.com/fluency/48/router.png" },
+      { id: "r3", x: 500, y: 250, label: "Маршрутизатор 3", icon: "https://img.icons8.com/fluency/48/router.png" },
+      { id: "r4", x: 520, y: 420, label: "Маршрутизатор 4", icon: "https://img.icons8.com/fluency/48/router.png" },
+      { id: "r5", x: 600, y: 100, label: "Маршрутизатор 5", icon: "https://img.icons8.com/fluency/48/router.png" },
+      { id: "hot1", x: 1180, y: 250, label: "Горячее хранилище", icon: "https://img.icons8.com/fluency/48/database.png" },
+      { id: "cold1", x: 1280, y: 450, label: "Холодное хранилище", icon: "https://img.icons8.com/fluency/48/database.png" }
+    ];
+
+    function renderBase() {
+      svg.selectAll("*").remove();
+
+      svg.selectAll(".icon")
+        .data(nodes)
+        .enter()
+        .append("image")
+        .attr("class", "icon")
+        .attr("xlink:href", d => d.icon)
+        .attr("x", d => d.x - 30)
+        .attr("y", d => d.y - 20)
+        .attr("width", 48)
+        .attr("height", 48);
+
+      svg.selectAll(".label")
+        .data(nodes)
+        .enter()
+        .append("text")
+        .attr("class", "label")
+        .attr("x", d => d.x)
+        .attr("y", d => d.y + 40)
+        .text(d => d.label);
+
+      const fillLevels = { hot1: 0, cold1: 0 };
+      svg.selectAll(".fill-bar")
+        .data(["hot1", "cold1"])
+        .enter()
+        .append("rect")
+        .attr("class", "fill-bar")
+        .attr("x", id => nodes.find(n => n.id === id).x + 20)
+        .attr("y", id => nodes.find(n => n.id === id).y - 30)
+        .attr("width", 10)
+        .attr("height", 0)
+        .attr("fill", id => id === "hot1" ? "red" : "blue")
+        .attr("id", id => "fill-" + id);
+
+      window.updateFill = function(serverId, amount) {
+        fillLevels[serverId] += amount;
+        svg.select("#fill-" + serverId)
+          .transition()
+          .duration(500)
+          .attr("height", fillLevels[serverId])
+          .attr("y", nodes.find(n => n.id === serverId).y - 30 - fillLevels[serverId]);
+      }
+    }
+
+    function simulateGossip() {
+      const path = ["client", "r1", "r2", "r4", "r5"];
+      path.forEach((id, i) => {
+        const from = nodes.find(n => n.id === path[i - 1]);
+        const to = nodes.find(n => n.id === id);
+        if (i > 0) {
+          const step = () => {
+            const packet = svg.append("circle")
+              .attr("class", "packet")
+              .attr("r", 6)
+              .attr("fill", "orange")
+              .attr("cx", from.x)
+              .attr("cy", from.y);
+            packet.transition()
+              .duration(1000)
+              .attr("cx", to.x)
+              .attr("cy", to.y)
+              .remove();
+          };
+          schedule(step, i * 1000);
+        }
+      });
+      schedule(showImageMaskAndTiling, path.length * 1000);
+    }
+
+    function showImageMaskAndTiling() {
+      svg.append("text")
+        .attr("x", 750)
+        .attr("y", 270)
+        .text("Снимок и маска");
+
+      const imgX = 750, imgY = 290, imgSize = 128;
+
+      svg.append("image")
+        .attr("x", imgX)
+        .attr("y", imgY)
+        .attr("width", imgSize)
+        .attr("height", imgSize)
+        .attr("xlink:href", "tyrol-w34.png");
+
+      schedule(() => {
+        svg.append("image")
+          .attr("x", imgX + 160)
+          .attr("y", imgY)
+          .attr("width", imgSize)
+          .attr("height", imgSize)
+          .attr("xlink:href", "tyrol-w34-mask.png");
+        animateTiling(imgX + 160, imgY, imgSize);
+      }, 1500);
+    }
+
+    function animateTiling(startX, startY, size) {
+      const tileSize = size / 3;
+      let count = 0;
+
+      for (let row = 0; row < 3; row++) {
+        for (let col = 0; col < 3; col++) {
+          const tileX = startX + col * tileSize;
+          const tileY = startY + row * tileSize;
+          const hot = row === 2 && (col === 1 || col === 2);
+          const dest = nodes.find(n => n.id === (hot ? "hot1" : "cold1"));
+
+          const box = svg.append("rect")
+            .attr("x", tileX)
+            .attr("y", tileY)
+            .attr("width", tileSize)
+            .attr("height", tileSize)
+            .attr("fill", hot ? "#f55" : "#55f")
+            .attr("opacity", 0.8);
+
+          const move = () => {
+            box.transition()
+              .duration(1500)
+              .attr("x", dest.x)
+              .attr("y", dest.y)
+              .on("end", () => {
+                updateFill(dest.id, 5);
+                box.remove();
+              });
+          };
+
+          schedule(move, count * 600);
+          count++;
+        }
+      }
+    }
+
+    function schedule(fn, delay) {
+      const step = () => !paused && fn();
+      const handle = setTimeout(step, delay);
+      pending.push(handle);
+    }
+
+    function resetSimulation() {
+      pending.forEach(clearTimeout);
+      pending = [];
+      paused = false;
+      renderBase();
+      simulateGossip();
+    }
+
+    function pauseSimulation() { paused = true; }
+    function resumeSimulation() {
+      if (!paused) return;
+      paused = false;
+      pending = [];
+      simulateGossip();
+    }
+
+    renderBase();
+    simulateGossip();
+  </script>
+</body>
+</html>

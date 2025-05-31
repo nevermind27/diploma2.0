@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Satellite Storage System Simulation</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script src="https://unpkg.com/topojson@3"></script>
+  <style>
+    body { font-family: sans-serif; background-color: #f9f9f9; }
+    svg { border: 1px solid #ccc; background-color: #fff; }
+    .node image { width: 40px; height: 40px; }
+    .node text { font-size: 12px; text-anchor: middle; fill: #333; }
+    .link { fill: none; stroke: #aaa; stroke-width: 2px; stroke-dasharray: 4; }
+    .packet { fill: orange; stroke: black; stroke-width: 1px; }
+    .highlight { fill: rgba(0, 200, 0, 0.3); }
+    .bit-text { font-size: 16px; fill: #000; font-family: monospace; }
+    .point-marker { fill: red; stroke: black; stroke-width: 1px; }
+    .area-highlight { fill: rgba(0, 0, 255, 0.1); stroke: #00f; stroke-width: 1; }
+    .bit-chunk { fill: lightgreen; }
+    .land { fill: #ccc; stroke: #999; stroke-width: 0.5px; }
+    .icon-label { font-size: 12px; fill: #000; text-anchor: middle; }
+  </style>
+</head>
+<body>
+  <h2>Distributed Satellite Storage Simulation</h2>
+  <svg width="1800" height="800"></svg>
+  <script>
+    const svg = d3.select("svg");
+
+    const point = { lat: 37.7, lon: 45.1 }; // Example coordinates
+    const width = 600, height = 300;
+    const gridOffset = { x: 20, y: 50 };
+    const maxSteps = 10;
+
+    svg.append("text")
+      .attr("x", gridOffset.x)
+      .attr("y", gridOffset.y - 20)
+      .style("font-weight", "bold")
+      .text(`Satellite coordinates: lat=${point.lat}, lon=${point.lon}`);
+
+    const worldGroup = svg.append("g").attr("transform", `translate(${gridOffset.x},${gridOffset.y})`);
+    const bitGroup = svg.append("g").attr("transform", `translate(${gridOffset.x},${gridOffset.y + height + 80})`);
+    const rightPanel = svg.append("g").attr("transform", `translate(${gridOffset.x + width + 150}, ${gridOffset.y})`);
+
+    const projection = d3.geoEquirectangular()
+      .center([0, 0])
+      .scale(width / (2 * Math.PI))
+      .translate([width / 2, height / 2]);
+
+    const path = d3.geoPath().projection(projection);
+
+    d3.json("https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json").then(worldData => {
+      const countries = topojson.feature(worldData, worldData.objects.countries).features;
+
+      worldGroup.selectAll(".land")
+        .data(countries)
+        .enter()
+        .append("path")
+        .attr("class", "land")
+        .attr("d", path);
+
+      drawWorldOutline();
+      simulateGeohashGrid().then(() => {
+        drawInfrastructure();
+        simulateNetworkFlow();
+      });
+    });
+
+    function drawWorldOutline() {
+      const lonLines = 12, latLines = 6;
+      for (let i = 0; i <= latLines; i++) {
+        const pos = height * i / latLines;
+        worldGroup.append("line").attr("x1", 0).attr("y1", pos).attr("x2", width).attr("y2", pos).attr("stroke", "#ccc");
+      }
+      for (let i = 0; i <= lonLines; i++) {
+        const pos = width * i / lonLines;
+        worldGroup.append("line").attr("x1", pos).attr("y1", 0).attr("x2", pos).attr("y2", height).attr("stroke", "#ccc");
+      }
+      worldGroup.append("text").attr("x", 0).attr("y", height + 15).text("-180");
+      worldGroup.append("text").attr("x", width - 30).attr("y", height + 15).text("+180");
+      worldGroup.append("text").attr("x", -30).attr("y", 12).text("+90");
+      worldGroup.append("text").attr("x", -30).attr("y", height).text("-90");
+    }
+
+    function binaryToBase32(bits) {
+      const base32 = "0123456789bcdefghjkmnpqrstuvwxyz";
+      const chunks = [];
+      for (let i = 0; i < bits.length; i += 5) {
+        const fiveBits = bits.slice(i, i + 5).join('').padEnd(5, '0');
+        const dec = parseInt(fiveBits, 2);
+        chunks.push({ bits: fiveBits, char: base32[dec] });
+      }
+      return chunks;
+    }
+
+    async function simulateGeohashGrid() {
+      let bits = [], latRange = [-90, 90], lonRange = [-180, 180];
+
+      for (let step = 0; step < maxSteps; step++) {
+        const isLon = step % 2 === 0;
+        const range = isLon ? lonRange : latRange;
+        const mid = (range[0] + range[1]) / 2;
+        const coord = isLon ? point.lon : point.lat;
+        const bit = coord >= mid ? 1 : 0;
+        bits.push(bit);
+        if (bit) range[0] = mid; else range[1] = mid;
+
+        drawHighlightBox(latRange, lonRange);
+        drawPoint();
+
+        bitGroup.append("text")
+          .attr("class", "bit-text")
+          .attr("x", step * 20)
+          .attr("y", 20)
+          .text(bit);
+
+        if ((step + 1) % 5 === 0) {
+          bitGroup.append("rect")
+            .attr("class", "bit-chunk")
+            .attr("x", (step - 4) * 20 - 5)
+            .attr("y", 5)
+            .attr("width", 100)
+            .attr("height", 20)
+            .lower();
+        }
+
+        await new Promise(res => setTimeout(res, 800));
+      }
+
+      const hashChunks = binaryToBase32(bits);
+      hashChunks.forEach((chunk, i) => {
+        bitGroup.append("text")
+          .attr("class", "bit-text")
+          .attr("x", i * 25)
+          .attr("y", 50)
+          .style("font-weight", "bold")
+          .text(chunk.char);
+      });
+    }
+
+    function drawHighlightBox(latR, lonR) {
+      const x0 = projection([lonR[0], latR[1]]);
+      const x1 = projection([lonR[1], latR[0]]);
+      worldGroup.selectAll(".area-highlight").remove();
+      worldGroup.append("rect")
+        .attr("class", "area-highlight")
+        .attr("x", x0[0])
+        .attr("y", x0[1])
+        .attr("width", x1[0] - x0[0])
+        .attr("height", x1[1] - x0[1]);
+    }
+
+    function drawPoint() {
+      const coord = projection([point.lon, point.lat]);
+      worldGroup.selectAll(".point-marker").remove();
+      worldGroup.append("circle")
+        .attr("class", "point-marker")
+        .attr("cx", coord[0])
+        .attr("cy", coord[1])
+        .attr("r", 5);
+    }
+
+    function drawInfrastructure() {
+      const icons = [
+        { label: "Клиент", y: 0 },
+        { label: "Маршрутизатор 1", y: 100 },
+        { label: "Маршрутизатор 2", y: 200 },
+        { label: "Маршрутизатор 3", y: 300 },
+        { label: "Маршрутизатор 4", y: 400 },
+        { label: "Маршрутизатор 5", y: 500 },
+        { label: "Горячее хранилище 1", y: 650 },
+        { label: "Холодное хранилище 1", y: 750 }
+      ];
+      icons.forEach(({ label, y }) => {
+        rightPanel.append("rect")
+          .attr("x", 0)
+          .attr("y", y)
+          .attr("width", 60)
+          .attr("height", 40)
+          .attr("fill", label.includes("хранилище") ? (label.includes("Горячее") ? "#f88" : "#88f") : "#ccc")
+          .attr("stroke", "#000");
+
+        rightPanel.append("text")
+          .attr("x", 30)
+          .attr("y", y + 25)
+          .attr("class", "icon-label")
+          .text(label);
+      });
+    }
+
+    function simulateNetworkFlow() {
+      // Placeholder for animating packet gossip flow and data routing
+      // e.g., draw lines from client to routers, animate hops, then show image/mask, tiling, and storage
+    }
+  </script>
+</body>
+</html>

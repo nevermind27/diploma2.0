@@ -1,34 +1,52 @@
-version: '3.8'
+version: '3'
 
 services:
-  min_router:
+  router1:
     build: .
     ports:
-      - "8080:8080"
+      - "8081:8080"  # Первый сервер на порту 8081
+    environment:
+      - POSTGRES_HOST=localhost
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=router_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
     volumes:
       - ./sentinel2_archive:/app/sentinel2_archive
-      - ./best_unet_resnet34.pth:/app/build/best_unet_resnet34.pth
-    depends_on:
-      - postgres
-    networks:
-      - router_network
+      - router1_data:/var/lib/postgresql  # Отдельный том для БД первого сервера
 
-  postgres:
-    image: postgres:14
-    environment:
-      POSTGRES_DB: router_db
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+  router2:
+    build: .
     ports:
-      - "5432:5432"
-    networks:
-      - router_network
+      - "8082:8080"  # Второй сервер на порту 8082
+    environment:
+      - POSTGRES_HOST=localhost
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=router_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - ./sentinel2_archive:/app/sentinel2_archive
+      - router2_data:/var/lib/postgresql  # Отдельный том для БД второго сервера
+
+  router3:
+    build: .
+    ports:
+      - "8083:8080"  # Третий сервер на порту 8083
+    environment:
+      - POSTGRES_HOST=localhost
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=router_db
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - ./sentinel2_archive:/app/sentinel2_archive
+      - router3_data:/var/lib/postgresql  # Отдельный том для БД третьего сервера
 
 volumes:
-  postgres_data:
+  router1_data:  # Том для данных БД первого сервера
+  router2_data:  # Том для данных БД второго сервера
+  router3_data:  # Том для данных БД третьего сервера
 
 networks:
   router_network:
